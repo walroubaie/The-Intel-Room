@@ -1,7 +1,5 @@
 # The Creative Room
 
-End-to-end creative strategy tool for paid social advertising.
-
 ## Setup
 
 ```bash
@@ -20,5 +18,5 @@ VITE_ANTHROPIC_API_KEY=your_key_here
 
 1. Push to GitHub
 2. Import repo on vercel.com
-3. Add environment variable: `VITE_ANTHROPIC_API_KEY`
+3. Add environment variable: `VITE_ANTHROPIC_API_KEY` = your Anthropic API key
 4. Deploy
