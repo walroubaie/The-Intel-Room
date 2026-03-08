@@ -1,981 +1,1377 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
+import * as mammoth from "mammoth";
 
-const T = {
-  bg:"#faf7f2",surface:"#fff",warm:"#f5f0e8",border:"#e2d9cc",borderMid:"#cfc4b4",
-  text:"#1c1814",mid:"#5c5248",dim:"#9c9088",
-  gold:"#8B6B1A",goldL:"#faf0d8",goldB:"#c9a84c",
-  blue:"#1e4d7a",blueL:"#eaf2fa",
-  green:"#1e5c38",greenL:"#e8f5ee",
-  red:"#7a1e1e",redL:"#faeaea",
-  purple:"#4a357a",purpleL:"#f0ecfa",
-  orange:"#7a4010",orangeL:"#faf0e8",
+const C = {
+  bg:"#f9f7f4", surface:"#ffffff", warm:"#f4f1ec", border:"#e8e2d9",
+  text:"#1a1714", mid:"#5a5148", dim:"#9a9088",
+  gold:"#8B6B1A", goldL:"#fdf6e3", goldB:"#c9a84c",
+  blue:"#1a4a78", blueL:"#eef3fa", blueB:"#c4d9ee",
+  green:"#1a5a36", greenL:"#eef6f1", greenB:"#b8dac6",
+  red:"#78201e", redL:"#fdf0f0", redB:"#e0b0ae",
+  purple:"#46327a", purpleL:"#f3f0fa", purpleB:"#cfc8e8",
+  orange:"#7a3e10", orangeL:"#fdf4ee", orangeB:"#dfc8b0",
 };
 
-// ── FRAMEWORK DEFINITIONS ─────────────────────────────────────────────────────
-const FORMAT_DEFS = {
-  "UGC Talking Head":"Person speaks directly to camera in a real home/environment. Like a friend telling you something. No scripts visible, natural delivery, authentic setting. NOT a studio or ring light.",
-  "Skit":"Acted scene or story. Can be funny, exaggerated, or sarcastic. A character performs a situation — could be a problem being dramatised, a relatable moment, or a comedic take. Story-based, not spoken to camera.",
-  "Voiceover B-Roll":"No face on screen. Real-life footage of environments, products, hands — with a voice narrating over it. The visuals tell one story, the voice adds the layer.",
-  "Founder Story":"The person behind the brand speaks directly. Personal, vulnerable, builds trust. Why they started it, what they discovered, what they believe.",
-  "Answer Bubble":"TikTok-specific format. Someone commented on a previous video — TikTok places their comment in a bubble overlay on screen. The creator responds to that comment in a new video. Great for objections and social proof.",
-  "How-To / Demo":"Shows the product being used step by step. Outcome-focused. The viewer learns something or sees a transformation happen.",
-  "Review / UGC Quote":"Static image. Real customer words are the hero — large text, authentic phrasing. The image supports but the quote does the work.",
-  "Us vs Them":"Static image only. Split layout — competitor on one side (crossed out, red X), your product on the other (green tick, wins highlighted). Direct comparison.",
-  "Benefit Callout":"Static image. One clear product benefit called out in large bold text. Simple, direct, no clutter.",
-  "Proof / Stats":"Static image leading with a number or verified claim. '97% said their mood improved.' The stat is the hook.",
-  "Founder / Product":"Static image of the founder holding or next to the product. Combines human trust signal with product visibility.",
-};
+// ─── CLIPBOARD — works in sandboxed iframes ──────────────────────────────────
+function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).catch(() => fallbackCopy(text));
+    } else { fallbackCopy(text); }
+  } catch { fallbackCopy(text); }
+}
+function fallbackCopy(text) {
+  const ta = document.createElement("textarea");
+  ta.value = text;
+  ta.style.cssText = "position:fixed;top:-9999px;left:-9999px;opacity:0;";
+  document.body.appendChild(ta);
+  ta.focus(); ta.select();
+  try { document.execCommand("copy"); } catch {}
+  document.body.removeChild(ta);
+}
 
-const FORMULA_DEFS = {
-  "Emotional Trigger":"Opens with a feeling, not a fact. The first line makes the viewer feel something before they understand what's being sold. Pulls from their emotional reality.",
-  "POV Hook":"'POV: You finally have the house to yourself.' Places the viewer inside a specific moment or scenario. They see themselves in it.",
-  "Tribal Identity":"'If you do X, this is for you.' Creates an in-group. The viewer self-selects. They feel seen and recognised.",
-  "Why Did No One Tell Me":"Positions the information as a secret or gap. Creates mild outrage or surprise that something was hidden. 'Nobody told me smell could actually change your brain chemistry.'",
-  "Curiosity Loop":"Opens a question or tension that cannot be resolved without watching more. The viewer has to keep watching to get the answer.",
-  "Golden Nugget":"Leads with a specific, surprising, useful fact. The fact itself is valuable enough to stop the scroll. '92% of wax melts contain synthetic fragrance that triggers headaches.'",
-  "Negative Hook":"Leads with what NOT to do, or what went wrong. Counterintuitive. 'Stop buying expensive candles until you read this.'",
-  "I-Led Story":"'I didn't expect this to become the thing I look forward to most.' First person, personal, specific. The viewer experiences the story through the narrator.",
-  "Before / After":"Sequential or split — the state before the product and the state after. The gap between them is the hook.",
-  "Founder Intro":"The founder introduces themselves and why they made this. Builds immediate trust and context. Works best when the reason is genuinely compelling.",
-  "Give Me Time":"Time or effort investment framing. 'Give me 10 minutes and I'll show you...' or 'You can do this in under 5 minutes.' Lowers the perceived barrier to engagement.",
-  "Investment Hook":"Leads with any kind of investment — money, time, or effort. 'I spent £200 testing every wax melt brand so you don't have to.' Positions the creator as having done the work on behalf of the viewer.",
-};
+// ─── FILE PARSING ─────────────────────────────────────────────────────────────
+async function extractPdfText(arrayBuffer) {
+  return new Promise((resolve, reject) => {
+    const doExtract = () => {
+      window.pdfjsLib.GlobalWorkerOptions.workerSrc =
+        "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+      window.pdfjsLib.getDocument({ data: arrayBuffer }).promise.then(pdf => {
+        const pages = [];
+        for (let i = 1; i <= pdf.numPages; i++)
+          pages.push(pdf.getPage(i).then(p => p.getTextContent().then(tc => tc.items.map(it => it.str).join(" "))));
+        Promise.all(pages).then(texts => resolve(texts.join("\n\n"))).catch(reject);
+      }).catch(reject);
+    };
+    if (window.pdfjsLib) { doExtract(); return; }
+    const s = document.createElement("script");
+    s.src = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
+    s.onload = doExtract; s.onerror = () => reject(new Error("Could not load PDF parser"));
+    document.head.appendChild(s);
+  });
+}
+async function parseFile(file) {
+  const n = file.name.toLowerCase();
+  if (n.endsWith(".pdf")) { const b = await file.arrayBuffer(); return await extractPdfText(b); }
+  if (n.endsWith(".docx") || n.endsWith(".doc")) { const b = await file.arrayBuffer(); const r = await mammoth.extractRawText({ arrayBuffer: b }); return r.value; }
+  return await file.text();
+}
 
-const AWARENESS_DEFS = {
-  "Unaware":"Doesn't know they have the problem yet. Cannot lead with the solution — must first make them feel the problem.",
-  "Problem Aware":"Knows the problem exists. Actively looking for relief but doesn't know your category or product.",
-  "Solution Aware":"Knows solutions like yours exist. Evaluating options. Needs to understand why yours is different.",
-  "Product Aware":"Has seen or heard of your product. Has not bought. Needs to overcome a specific objection or trigger.",
-  "Most Aware":"Knows your product well. Just needs a reason to act now — offer, urgency, final nudge.",
-};
+// ─── SYSTEM PROMPTS ──────────────────────────────────────────────────────────
+const SYS_LAUNCH = `You are an expert paid media strategist. LAUNCH MODE: help build test architecture BEFORE spending a dollar. Be conversational, ask 1-2 questions at a time. Never assume — always ask if unclear.
 
-const AW_ANGLES = {
-  "Unaware":["Consequences","Misconceptions","Identity","Use Case"],
-  "Problem Aware":["Desired Outcome","Acceptance / Normalised","Failed Solutions","Consequences"],
-  "Solution Aware":["Education","Objections","Features / Benefits","Failed Solutions"],
-  "Product Aware":["Objections","Features / Benefits","Desired Outcome","Social Proof"],
-  "Most Aware":["Desired Outcome","Objections","Identity"],
-};
+CRITICAL RULES — NEVER BREAK:
+- NEVER assume existing campaign data or a winners campaign unless told
+- NEVER recommend ASC+ unless they confirm pixel maturity + purchase history
+- NEVER introduce the 20/25% testing/winners split unless a winners campaign already exists
+- NEVER assume a target CPA — calculate it from AOV and margins, or ask
+- If info is already given upfront, skip those questions
 
-const PRINCIPLES=["Pain-First","Desire-First"];
-const FORMATS={VIDEO:["UGC Talking Head","Skit","Voiceover B-Roll","Founder Story","Answer Bubble","How-To / Demo"],IMAGE:["Review / UGC Quote","Us vs Them","Benefit Callout","Proof / Stats","Founder / Product"]};
-const AWARENESS=["Unaware","Problem Aware","Solution Aware","Product Aware","Most Aware"];
-const ANGLES=["Desired Outcome","Objections","Features / Benefits","Use Case","Consequences","Misconceptions","Education","Acceptance / Normalised","Failed Solutions","Identity","Social Proof"];
-const TRIGGERS=["Pain","Desire","Fear","Identity","Curiosity","Social Proof","Transformation"];
-const FORMULAS=Object.keys(FORMULA_DEFS);
+STEP 1 — ACCOUNT STATUS (always first):
+Ask: "Is this a brand new ad account, or do you have existing campaigns running?"
+New: no pixel history, start fresh — CBO or ABO only, no ASC
+Existing: ask about winners campaign, pixel maturity, current spend
 
-const EMPTY={name:"",organising_idea:"",strategic_tension:"",white_space:"",primary_principle:"",core_persona:{name:"",age:"",desc:"",desire:"",pain:"",language:{trigger:[],pain:[],desire:[],objection:[]}},secondary_persona:{name:"",age:"",desc:"",desire:"",pain:"",language:{trigger:[],pain:[],desire:[],objection:[]}},proof_points:[],brand_voice:[],concepts:[]};
+STEP 2 — ECONOMICS (before any budget talk):
+Ask: AOV and gross margin %
+Calculate CPA target: AOV x margin. Example: $100 AOV, 60% margin = $60 max CPA
+If ROAS target given instead: CPA = AOV / target ROAS
+Note: daily budget per ad set = 5-10x target CPA
 
-const PARSE_PROMPT=`You are a creative strategist. Extract brand data from this document. Analyse all customer language and categorise each phrase into: trigger (moment they reach for the product), pain (frustration or failure), desire (outcome they want), objection (hesitation before buying). Use the customers exact words. Return ONLY raw JSON no markdown:\n{"name":"","organising_idea":"","strategic_tension":"","white_space":"","primary_principle":"Pain-First or Desire-First","core_persona":{"name":"","age":"","desc":"","desire":"","pain":"","language":{"trigger":[],"pain":[],"desire":[],"objection":[]}},"secondary_persona":{"name":"","age":"","desc":"","desire":"","pain":"","language":{"trigger":[],"pain":[],"desire":[],"objection":[]}},"proof_points":[],"brand_voice":[],"concepts":[]}`;
+STEP 3 — BUDGET AND STRUCTURE:
+Recommend based on budget AND account status:
+- New account (any budget): CBO only — 1 campaign, multiple ad sets. No ASC.
+- Existing, under $200/day: CBO or ABO
+- Existing, $200-500/day: ABO for per-ad-set control
+- Existing, $500K+/month: Cost cap
+- If winners campaign exists: introduce 20/25% testing vs 75/80% winners split
+- If no winners campaign: single testing campaign only
 
-// ── ATOMS ─────────────────────────────────────────────────────────────────────
-const Lbl=({c=T.dim,children})=><div style={{fontSize:9,fontWeight:800,letterSpacing:2.5,textTransform:"uppercase",color:c,marginBottom:5}}>{children}</div>;
-const Divider=()=><div style={{height:1,background:T.border,margin:"22px 0"}}/>;
-const Chip=({label,color=T.gold,bg=T.goldL,border=T.goldB})=><span style={{fontSize:10,fontWeight:700,letterSpacing:1,color,background:bg,border:`1px solid ${border}`,borderRadius:4,padding:"2px 8px",whiteSpace:"nowrap"}}>{label}</span>;
+STEP 4 — CONCEPTS AND HYPOTHESES:
+How many concepts? Brief description of each.
+Per concept: "We are testing [X] because we believe [Y audience] will respond to [Z] because [mechanism]."
 
-const Btn=({onClick,children,disabled,variant="primary",full,style:s={}})=>(
-  <button onClick={onClick} disabled={disabled} style={{background:variant==="primary"?(disabled?T.warm:T.text):(variant==="ghost"?"transparent":T.surface),color:variant==="primary"?(disabled?T.dim:"#fff"):T.mid,border:variant==="primary"?"none":`1.5px solid ${T.border}`,borderRadius:7,padding:"10px 18px",fontSize:12,fontWeight:700,cursor:disabled?"not-allowed":"pointer",width:full?"100%":"auto",...s}}>{children}</button>
-);
+STEP 5 — SUCCESS THRESHOLDS (set before launch):
+Thumbstop target: aim above 25%, strong above 35%
+Hold rate target: aim above 40%
+CPA ceiling: from Step 2
+Minimum spend before verdict: $20-50 per concept minimum, ideally $100 over 3+ days
+Time minimum: 7 days — algorithm needs learning phase
 
-const FInput=({label,value,onChange,multi,placeholder,rows=3})=>(
-  <div style={{marginBottom:13}}>
-    {label&&<Lbl>{label}</Lbl>}
-    {multi?<textarea value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} rows={rows} style={{width:"100%",background:T.surface,border:`1.5px solid ${T.border}`,borderRadius:6,padding:"8px 12px",fontSize:13,color:T.text,fontFamily:"Georgia,serif",resize:"vertical",outline:"none",boxSizing:"border-box",lineHeight:1.6}}/>
-    :<input value={value} onChange={e=>onChange(e.target.value)} placeholder={placeholder} style={{width:"100%",background:T.surface,border:`1.5px solid ${T.border}`,borderRadius:6,padding:"8px 12px",fontSize:13,color:T.text,fontFamily:"Georgia,serif",outline:"none",boxSizing:"border-box"}}/>}
-  </div>
-);
+STEP 6 — NAMING CONVENTION:
+Format_HookType_Angle_Persona_Date (e.g. UGC_Confessional_LossAversion_ClumsiGirl_0625)
 
-const ChoiceGrid=({options,selected,onSelect,color=T.gold,colorL,colorB,multi=false})=>(
-  <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:14}}>
-    {options.map(opt=>{
-      const label=typeof opt==="string"?opt:opt.label;
-      const sub=typeof opt==="object"?opt.sub:null;
-      const def=typeof opt==="object"?opt.def:null;
-      const isSel=multi?(selected||[]).includes(label):selected===label;
-      return(
-        <button key={label} onClick={()=>onSelect(label)} title={def||""} style={{background:isSel?(colorL||T.goldL):T.surface,border:`2px solid ${isSel?(colorB||T.goldB):T.border}`,borderRadius:8,padding:"9px 14px",cursor:"pointer",textAlign:"left",flex:"1 1 130px",transition:"all 0.12s"}}>
-          <div style={{fontSize:12,fontWeight:700,color:isSel?(color||T.gold):T.text}}>{label}</div>
-          {sub&&<div style={{fontSize:10,color:isSel?color:T.dim,marginTop:2,lineHeight:1.4}}>{sub}</div>}
-          {isSel&&<div style={{fontSize:10,color:color,marginTop:3,fontWeight:700}}>v</div>}
-        </button>
-      );
-    })}
-  </div>
-);
+STEP 7 — FINAL OUTPUT:
+When all info is gathered, output BOTH sections completely. Never cut off mid-section.
 
-// ── SETUP ─────────────────────────────────────────────────────────────────────
-function Setup({onDone}){
-  const [loading,setLoading]=useState(false);
-  const [error,setError]=useState("");
-  const [fileName,setFileName]=useState("");
-  const [payload,setPayload]=useState(null);
-  const [drag,setDrag]=useState(false);
+CRITICAL: The CAMPAIGN SETUP CHECKLIST section must use EXACTLY this format with pipe separators. This is machine-parsed to render a visual tree — any deviation breaks the render.
 
-  const readFile=file=>{
-    setError("");setFileName(file.name);setPayload(null);
-    const ext=file.name.split(".").pop().toLowerCase();
-    if(ext==="pdf"){
-      const r=new FileReader();
-      r.onload=e=>setPayload({type:"pdf",data:e.target.result.split(",")[1]});
-      r.readAsDataURL(file);
-    } else if(["txt","md"].includes(ext)){
-      const r=new FileReader();
-      r.onload=e=>setPayload({type:"text",text:e.target.result});
-      r.readAsText(file);
-    } else if(ext==="docx"){
-      const r=new FileReader();
-      r.onload=e=>{
-        const bin=e.target.result;
-        let out="",cur="";
-        for(let i=0;i<bin.length;i++){const c=bin.charCodeAt(i);if(c>=32&&c<127)cur+=bin[i];else{if(cur.length>5)out+=cur+" ";cur="";}}
-        const text=out.replace(/<[^>]{0,200}>/g," ").replace(/\s{3,}/g,"\n").trim();
-        if(text.length>200)setPayload({type:"text",text});
-        else setError("Could not extract text from DOCX. Please save as PDF.");
-      };
-      r.readAsBinaryString(file);
-    } else if(ext==="json"){
-      const r=new FileReader();
-      r.onload=e=>{try{onDone(JSON.parse(e.target.result));}catch{setError("Invalid JSON file.");}};
-      r.readAsText(file);
-    } else{
-      setError("Please upload PDF, DOCX, TXT, or a saved brand JSON.");
+CAMPAIGN SETUP CHECKLIST
+CAMPAIGN: [name] | Objective: [X] | Budget: $[X]/day | Type: CBO
+AD SET: [name] | Audience: [X] | Placement: Advantage+
+AD: [name] | Format: [X] | Hook: [short hook text] | CTA: [X]
+AD: [name] | Format: [X] | Hook: [short hook text] | CTA: [X]
+AD SET: [name] | Audience: [X] | Placement: Advantage+
+AD: [name] | Format: [X] | Hook: [short hook text] | CTA: [X]
+AD: [name] | Format: [X] | Hook: [short hook text] | CTA: [X]
+
+Rules for the checklist:
+- Each CAMPAIGN:, AD SET:, AD: line starts at the beginning of the line with no indentation, no bullet, no markdown
+- Use exactly one pipe | between each field
+- Keep field values short (under 60 chars each)
+- Output all campaigns, all ad sets, all ads — never truncate
+
+TEST RATIONALE
+[One paragraph per concept: what is tested, the hypothesis, what winning looks like in numbers]`;
+
+const SYS_DIAGNOSE = `You are a precision paid media analyst. DIAGNOSE MODE. Dara Denney funnel-layer framework.
+
+Parse any data format. State what you received. Flag missing metrics conversationally — do not halt diagnosis for one missing number.
+
+FUNNEL DIAGNOSIS — layer by layer per concept:
+
+LAYER 1 — THUMBSTOP (3-sec views / impressions x 100)
+Below 25%: HOOK PROBLEM — creative issue, not media
+25-35%: Solid. Above 35%: Strong
+Fix: new first frame, different headline, different opening scene
+
+LAYER 2 — HOLD RATE (15-sec views / 3-sec views x 100)
+Below 30%: BODY PROBLEM — hook worked, body did not follow through
+40-50%: Average. Above 60%: Strong
+Fix: body must logically follow hook. Add second hook at drop-off timestamp.
+
+LAYER 3 — CTR (clicks / impressions x 100)
+Strong ecom: 1.5-2.5%
+High CTR + low CVR = landing page problem
+Good hold + low CTR = offer or CTA problem
+Note: CTR drives ~4% of ROI. Diagnostic only.
+
+LAYER 4 — CPA / ROAS / CVR
+Compare to THEIR account averages first, then benchmarks
+Meta CVR average: 8-9% of clicks
+
+VERDICTS:
+SCALE - thumbstop 30%+, hold 40%+, CPA at/below target. Move via original Post ID.
+ITERATE - one layer weak. Name exactly what to change.
+KILL - 2-3x CPA with no signals after sufficient spend. Or all three layers weak.
+FATIGUE - add new creative alongside, never pause.
+
+ALWAYS end with:
+
+SEND TO THE CREATIVE ROOM
+
+WHAT WON:
+- Format: [format]
+- Angle: [angle]
+- Persona: [persona]
+- Why it won (mechanism not metrics): [explanation]
+
+WHAT TO BRIEF NEXT:
+[Specific creative direction]
+
+WHAT TO AVOID:
+[What failed and mechanism behind why]
+
+PATTERNS EMERGING:
+[Cross-concept patterns]
+---`;
+
+const SYS_REPORT = `You are a performance analyst writing sharp INTERNAL reports. For the strategist, not clients. No polish. Just clarity and truth.
+
+First ask: Diagnose output to build from, or raw data?
+- Diagnose output: use as foundation
+- Raw data: quick diagnosis first, then report
+
+REPORT FORMAT — complete all sections:
+
+1. WHAT HAPPENED — 2-3 sentences max. TLDR.
+2. PERFORMANCE SNAPSHOT — key metrics vs target or prior period
+3. CREATIVE BREAKDOWN — per concept: what worked, what did not, WHY. Then cross-concept patterns.
+4. HYPOTHESIS VERDICT — did launch hypotheses hold? What changed?
+5. WHAT TO DO NEXT — scale which, iterate how, kill what, brief what. Every line is an action.
+6. PATTERN LOG — what is this data teaching about this audience. Running intelligence.
+
+Tone: Writing notes to yourself. Ruthlessly honest.`;
+
+const SYS_DISSECT_P1 = `You are a world-class creative strategist who reverse-engineers high-performing ads to extract transferable principles.
+
+Your job right now: dissect this ad in depth. Part 1 only — no brand recommendations yet.
+
+After completing the dissection, end with exactly this line:
+---
+Want to see how this could work for your brand?
+
+1. HOOK MECHANISM
+Name the specific technique (curiosity gap, bold claim, visual contrast, relatable scenario, transformation preview, controversy, pattern interrupt, social proof stack, self-deprecating confession, tribal identity, benign violation, etc.)
+Why does it stop the scroll — what does the brain do in the first 0.3 seconds?
+
+2. ANGLE
+What exact desire, pain, fear, or aspiration is activated? Not "it solves a problem" — the exact emotional state and why it makes someone stop.
+
+3. PERSONA
+Who is this speaking to? Evidence from language, setting, casting, cultural references, humour style.
+
+4. FORMAT LOGIC
+Why this format for this message? What would be lost if you changed it?
+
+5. PSYCHOLOGICAL TRIGGER
+Name it. Explain exactly HOW it is deployed — the specific mechanic and why the brain responds.
+
+6. STRUCTURE — BEAT BY BEAT
+First 3 seconds: what happens and why that order works.
+Middle: how it holds attention and builds the case.
+CTA: what it asks and why that ask works here.
+
+7. WHY IT IS WORKING
+Algorithm: why the platform rewards this (engagement signals, watch time, share/save behaviour).
+Human: the psychological mechanism — what emotion does it end on and why does that drive action.
+
+Never say "it feels authentic." Explain what specific choices create that perception.`;
+
+const SYS_DISSECT_P2 = `You are a world-class creative strategist applying a dissected ad's mechanism to a specific brand.
+
+DEFAULT RESPONSE FORMAT — lead with hooks, nothing else unless asked:
+
+Start with ONE sentence stating the transferable mechanism.
+Then immediately output hook options in labelled categories.
+
+HOOK CATEGORIES:
+Group hooks by the violation type or angle (e.g. Sexual Taboo → Product Context, Relationship Taboo, Wedding Culture, etc.)
+Write 4-6 hooks per category. Each hook must be ready to use — exact wording, no placeholders.
+End each category with one line: "Phase: [Phase 1 / Phase 2]" and why.
+
+After ALL categories, add one short paragraph (3-5 sentences max): which hooks to test first and why. No essays. No frameworks.
+
+TONE: Direct. Punchy. Like a strategist in a working session, not a consulting report.
+
+DO NOT write:
+- Long strategic assessments
+- Numbered frameworks
+- Lengthy explanations of brand fit
+- Multiple pages of analysis
+
+The user will ask follow-up questions if they want more depth. Just give them the hooks.
+
+If the user asks for a brief on a specific hook, output EXACTLY this format:
+
+BRIEF FOR THE CREATIVE ROOM
+---
+SOURCE AD: [one sentence describing the dissected ad]
+TRANSFERABLE PRINCIPLE: [mechanism in one sentence]
+STRATEGIC PHASE: [Phase 1 - Direct Response / Phase 2 - Brand Awareness / Both]
+HOOK TYPE: [name]
+HOOK: [exact hook wording]
+ANGLE: [specific desire/pain/fear being activated]
+FORMAT: [recommendation and why]
+PERSONA: [who this is for — specific]
+FIRST 3 SECONDS: [exactly what must happen and why]
+BEAT BY BEAT: [Frame 1 / Frame 2 / Frame 3 / CTA — brief, actionable]
+WHAT TO AVOID: [3 specific things not to do]
+OBJECTIVE: [what this ad must make viewer feel and do]
+SUCCESS METRICS: Hook rate target / CTR target / CPA target
+---
+
+Only output the brief if specifically asked. Never add it unprompted.`;
+
+// ─── API ─────────────────────────────────────────────────────────────────────
+const TOKEN_LIMITS = { launch: 4000, diagnose: 2500, report: 2500, dissect: 4000 };
+
+async function callClaude(messages, system, mode) {
+  const max_tokens = TOKEN_LIMITS[mode] || 2500;
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens, system, messages }),
+  });
+  if (!res.ok) throw new Error("API error " + res.status);
+  const d = await res.json();
+  return d.content?.[0]?.text || "Something went wrong.";
+}
+
+// ─── ICONS ───────────────────────────────────────────────────────────────────
+function Icon({ name, size = 16 }) {
+  const s = size;
+  if (name === "launch") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>;
+  if (name === "diagnose") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>;
+  if (name === "report") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>;
+  if (name === "dissect") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/><line x1="11" y1="8" x2="11" y2="14"/><line x1="8" y1="11" x2="14" y2="11"/></svg>;
+  if (name === "send") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>;
+  if (name === "copy") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>;
+  if (name === "check") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>;
+  if (name === "back") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><line x1="19" y1="12" x2="5" y2="12"/><polyline points="12 19 5 12 12 5"/></svg>;
+  if (name === "image") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>;
+  if (name === "close") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>;
+  if (name === "context") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>;
+  if (name === "brand") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M20 7H4a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></svg>;
+  if (name === "upload") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>;
+  if (name === "trash") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>;
+  if (name === "edit") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>;
+  if (name === "file") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>;
+  if (name === "new") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M12 5v14M5 12h14"/></svg>;
+  if (name === "creative") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>;
+  if (name === "tree") return <svg width={s} height={s} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3h7v7H3z"/><path d="M14 3h7v7h-7z"/><path d="M14 14h7v7h-7z"/><path d="M3 14h7v7H3z"/></svg>;
+  return null;
+}
+
+// ─── CAMPAIGN TREE VISUALISER ─────────────────────────────────────────────────
+// Parses CAMPAIGN SETUP CHECKLIST section into a tree and renders it
+function parseChecklistTree(text) {
+  // Strip markdown bold and clean up
+  const clean = text.replace(/\*\*/g, "").replace(/`/g, "");
+  const lines = clean.split("\n").map(l => l.trim()).filter(Boolean);
+  const campaigns = [];
+  let currentCampaign = null;
+  let currentAdSet = null;
+
+  for (const line of lines) {
+    // Match CAMPAIGN: with or without leading symbols
+    const campMatch = line.match(/^(?:[-*>]\s*)?CAMPAIGN:\s*(.+)/i);
+    const adsetMatch = line.match(/^(?:[-*>]\s*)?AD\s*SET:\s*(.+)/i);
+    const adMatch = line.match(/^(?:[-*>]\s*)?AD:\s*(.+)/i);
+
+    if (campMatch) {
+      const parts = campMatch[1].split("|").map(s => s.trim());
+      currentCampaign = { name: parts[0] || "", meta: parts.slice(1), adSets: [] };
+      currentAdSet = null;
+      campaigns.push(currentCampaign);
+    } else if (adsetMatch) {
+      if (!currentCampaign) continue;
+      const parts = adsetMatch[1].split("|").map(s => s.trim());
+      currentAdSet = { name: parts[0] || "", meta: parts.slice(1), ads: [] };
+      currentCampaign.adSets.push(currentAdSet);
+    } else if (adMatch) {
+      if (!currentAdSet) continue;
+      const parts = adMatch[1].split("|").map(s => s.trim());
+      currentAdSet.ads.push({ name: parts[0] || "", meta: parts.slice(1) });
     }
-  };
+  }
+  return campaigns;
+}
 
-  const run=async()=>{
-    if(!payload)return;
-    setLoading(true);setError("");
-    try{
-      const content=payload.type==="pdf"
-        ?[{type:"document",source:{type:"base64",media_type:"application/pdf",data:payload.data}},{type:"text",text:PARSE_PROMPT}]
-        :`${PARSE_PROMPT}\n\nDOCUMENT:\n${payload.text}`;
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":import.meta.env.VITE_ANTHROPIC_API_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:3000,messages:[{role:"user",content}]})});
-      const d=await res.json();
-      const raw=(d.content?.[0]?.text||"").replace(/```json|```/g,"").trim();
-      onDone(JSON.parse(raw));
-    }catch{setError("Could not parse. Try a different format or start blank.");}
-    setLoading(false);
-  };
+// ─── VISUAL CAMPAIGN TREE ─────────────────────────────────────────────────────
+function CampaignBox({ label, meta, color, bg, bdr, level }) {
+  const levelLabel = ["CAMPAIGN", "AD SET", "AD"][level] || "";
+  return (
+    <div style={{ background: bg, border: "2px solid " + bdr, borderRadius: 10, padding: "10px 14px", minWidth: level === 2 ? 160 : 200, maxWidth: level === 2 ? 220 : 300, flex: "0 0 auto" }}>
+      <div style={{ fontSize: 9, fontWeight: 800, color, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 4, opacity: 0.8 }}>{levelLabel}</div>
+      <div style={{ fontSize: 12, fontWeight: 700, color, lineHeight: 1.35, marginBottom: meta.length ? 6 : 0 }}>{label}</div>
+      {meta.length > 0 && (
+        <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+          {meta.map((m, i) => (
+            <div key={i} style={{ fontSize: 11, color: C.mid, lineHeight: 1.4 }}>{m}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
-  return(
-    <div style={{minHeight:"100vh",background:T.bg,display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
-      <div style={{maxWidth:500,width:"100%"}}>
-        <div style={{textAlign:"center",marginBottom:32}}>
-          <div style={{fontSize:10,fontWeight:800,letterSpacing:3,color:T.dim,textTransform:"uppercase",marginBottom:8}}>Creative Room</div>
-          <div style={{fontSize:14,color:T.mid,lineHeight:1.8,marginBottom:20}}>Your end-to-end creative strategy tool. Upload a brand strategy doc and the AI populates everything. Generate concepts by awareness stage, build hooks with a guided 8-step process, pick from 4 AI-generated options, then produce a complete editable creator brief ready to send.</div>
-          <div style={{display:"flex",gap:8,justifyContent:"center",flexWrap:"wrap",marginBottom:16}}>
-            {["Strategy Doc","Concept Generator","Hook Builder","Creator Briefs"].map(s=>(
-              <span key={s} style={{fontSize:11,fontWeight:700,color:T.gold,background:T.goldL,border:`1px solid ${T.goldB}`,borderRadius:20,padding:"4px 12px"}}>{s}</span>
-            ))}
+function Connector({ vertical }) {
+  return vertical
+    ? <div style={{ width: 2, height: 20, background: C.border, margin: "0 auto" }} />
+    : <div style={{ height: 2, flex: 1, background: C.border, minWidth: 12 }} />;
+}
+
+function CampaignTree({ text }) {
+  const campaigns = parseChecklistTree(text);
+  if (!campaigns.length) return null;
+
+  return (
+    <div style={{ background: C.surface, border: "1px solid " + C.blueB, borderRadius: 14, padding: "18px 16px", margin: "14px 0", overflowX: "auto" }}>
+      <div style={{ fontSize: 10, fontWeight: 800, color: C.blue, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 16 }}>Ads Manager Structure</div>
+
+      {campaigns.map((camp, ci) => (
+        <div key={ci} style={{ marginBottom: ci < campaigns.length - 1 ? 28 : 0 }}>
+          {/* Campaign row */}
+          <div style={{ display: "flex", justifyContent: "center", marginBottom: 0 }}>
+            <CampaignBox label={camp.name} meta={camp.meta} color={C.blue} bg={C.blueL} bdr={C.blueB} level={0} />
           </div>
+
+          {camp.adSets.length > 0 && (
+            <>
+              {/* Vertical line down from campaign */}
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <Connector vertical />
+              </div>
+
+              {/* Horizontal bar across ad sets */}
+              {camp.adSets.length > 1 && (
+                <div style={{ position: "relative", display: "flex", justifyContent: "center" }}>
+                  <div style={{ position: "absolute", top: 0, left: "50%", transform: "translateX(-50%)", height: 2, background: C.border, width: Math.min(camp.adSets.length * 240, 720) + "px" }} />
+                </div>
+              )}
+
+              {/* Ad Sets row */}
+              <div style={{ display: "flex", justifyContent: "center", gap: 20, alignItems: "flex-start", flexWrap: "wrap" }}>
+                {camp.adSets.map((adSet, si) => (
+                  <div key={si} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                    {/* Vertical tick up to horizontal bar (only if multiple adsets) */}
+                    {camp.adSets.length > 1 && <Connector vertical />}
+                    <CampaignBox label={adSet.name} meta={adSet.meta} color={C.purple} bg={C.purpleL} bdr={C.purpleB} level={1} />
+
+                    {adSet.ads.length > 0 && (
+                      <>
+                        <Connector vertical />
+                        {/* Horizontal across ads */}
+                        {adSet.ads.length > 1 && (
+                          <div style={{ position: "relative", width: "100%", display: "flex", justifyContent: "center" }}>
+                            <div style={{ height: 2, background: C.border, width: Math.min(adSet.ads.length * 190, 440) + "px" }} />
+                          </div>
+                        )}
+                        {/* Ads row */}
+                        <div style={{ display: "flex", gap: 10, justifyContent: "center", flexWrap: "wrap", marginTop: adSet.ads.length > 1 ? 0 : 0 }}>
+                          {adSet.ads.map((ad, ai) => (
+                            <div key={ai} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+                              {adSet.ads.length > 1 && <Connector vertical />}
+                              <CampaignBox label={ad.name} meta={ad.meta} color={C.green} bg={C.greenL} bdr={C.greenB} level={2} />
+                            </div>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
         </div>
-        <div onDragOver={e=>{e.preventDefault();setDrag(true);}} onDragLeave={()=>setDrag(false)} onDrop={e=>{e.preventDefault();setDrag(false);const f=e.dataTransfer.files[0];if(f)readFile(f);}} onClick={()=>document.getElementById("fi").click()}
-          style={{border:`2px dashed ${drag?T.goldB:payload?T.green:T.borderMid}`,borderRadius:10,padding:"36px 24px",textAlign:"center",background:drag?T.goldL:payload?T.greenL:T.surface,cursor:"pointer",marginBottom:14,transition:"all 0.15s"}}>
-          {payload?<><div style={{fontSize:26,marginBottom:6}}>v</div><div style={{fontSize:14,fontWeight:700,color:T.green}}>{fileName}</div><div style={{fontSize:12,color:T.mid,marginTop:4}}>Ready — click Populate below</div></>
-          :<><div style={{fontSize:32,marginBottom:8}}>doc</div><div style={{fontSize:14,fontWeight:700,color:T.text}}>Drop your strategy doc here</div><div style={{fontSize:12,color:T.dim,marginTop:4}}>PDF / DOCX / TXT / Brand JSON</div></>}
-          <input id="fi" type="file" accept=".pdf,.docx,.txt,.md,.json" onChange={e=>{if(e.target.files[0])readFile(e.target.files[0]);}} style={{display:"none"}}/>
+      ))}
+    </div>
+  );
+}
+
+// ─── MARKDOWN ────────────────────────────────────────────────────────────────
+function Inline({ text }) {
+  const parts = text.split(/(\*\*[^*]+\*\*|\*[^*]+\*)/g);
+  return <>{parts.map((p, i) => {
+    if (p.startsWith("**") && p.endsWith("**")) return <strong key={i}>{p.slice(2, -2)}</strong>;
+    if (p.startsWith("*") && p.endsWith("*")) return <em key={i}>{p.slice(1, -1)}</em>;
+    return <span key={i}>{p}</span>;
+  })}</>;
+}
+
+function CopyBtn({ text }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button onClick={() => { copyText(text); setDone(true); setTimeout(() => setDone(false), 2000); }}
+      style={{ display: "flex", alignItems: "center", gap: 4, background: "none", border: "none", cursor: "pointer", color: done ? C.green : C.dim, fontSize: 12, padding: "3px 6px", borderRadius: 5 }}>
+      <Icon name={done ? "check" : "copy"} size={13} />
+    </button>
+  );
+}
+
+function MD({ text }) {
+  const lines = text.split("\n");
+  const out = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const l = lines[i];
+
+    // CODE BLOCK — check if it's a campaign tree
+    if (l.trim().startsWith("```")) {
+      const block = []; i++;
+      while (i < lines.length && !lines[i].trim().startsWith("```")) { block.push(lines[i]); i++; }
+      if (lines[i]?.trim().startsWith("```")) i++;
+      const blockText = block.join("\n");
+      const treeData = parseChecklistTree(blockText);
+      if (treeData.length > 0) {
+        out.push(<CampaignTree key={"tree-cb" + i} text={blockText} />);
+      } else {
+        out.push(
+          <pre key={"pre" + i} style={{ background: C.warm, border: "1px solid " + C.border, borderRadius: 9, padding: "12px 14px", fontSize: 12, overflowX: "auto", margin: "8px 0", color: C.text, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+            {blockText}
+          </pre>
+        );
+      }
+      continue;
+    }
+
+    // SEND TO THE CREATIVE ROOM block
+    if (l.includes("SEND TO THE CREATIVE ROOM")) {
+      const block = []; i++;
+      while (i < lines.length && lines[i] !== "---") { block.push(lines[i]); i++; }
+      if (lines[i] === "---") i++;
+      out.push(
+        <div key={"cr" + i} style={{ background: C.greenL, border: "1px solid " + C.greenB, borderRadius: 11, padding: "14px 16px", margin: "14px 0" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.green, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 9 }}>&#8594; Send to The Creative Room</div>
+          {block.map((bl, bi) => bl.trim() ? <p key={bi} style={{ margin: "3px 0", fontSize: 13, color: C.text, lineHeight: 1.65 }}><Inline text={bl} /></p> : <div key={bi} style={{ height: 5 }} />)}
         </div>
-        {error&&<div style={{background:T.redL,border:`1px solid ${T.red}30`,borderRadius:6,padding:"10px 14px",fontSize:12,color:T.red,marginBottom:12}}>{error}</div>}
-        <div style={{display:"flex",gap:10}}>
-          <Btn onClick={run} disabled={!payload||loading} style={{flex:1}}>{loading?"Reading document...":"Populate from Document"}</Btn>
-          <Btn onClick={()=>onDone(EMPTY)} variant="secondary">Start Blank</Btn>
+      );
+      continue;
+    }
+
+    // BRIEF FOR THE CREATIVE ROOM block — only trigger on the standalone header line
+    if (l.trim() === "BRIEF FOR THE CREATIVE ROOM") {
+      const nextLine = lines[i + 1]?.trim();
+      if (nextLine === "---") {
+        i += 2;
+        const block = [];
+        while (i < lines.length && lines[i].trim() !== "---") { block.push(lines[i]); i++; }
+        if (lines[i]?.trim() === "---") i++;
+        const briefText = block.join("\n");
+        const formatted = "=== BRIEF FROM THE INTEL ROOM ===\n\n" + briefText + "\n\n=== END BRIEF ===";
+        out.push(<BriefBlock key={"bf" + i} content={block} briefText={formatted} />);
+        continue;
+      }
+    }
+
+    // CAMPAIGN SETUP CHECKLIST header trigger
+    if (l.trim().startsWith("CAMPAIGN SETUP CHECKLIST")) {
+      const checklistLines = []; i++;
+      while (i < lines.length && !lines[i].trim().startsWith("TEST RATIONALE") && !lines[i].trim().startsWith("## ") && !lines[i].trim().startsWith("```")) {
+        checklistLines.push(lines[i]); i++;
+      }
+      const checklistText = checklistLines.join("\n");
+      const treeData = parseChecklistTree(checklistText);
+      if (treeData.length > 0) {
+        out.push(<CampaignTree key={"tree" + i} text={checklistText} />);
+      } else {
+        out.push(
+          <div key={"cl" + i} style={{ background: C.blueL, border: "1px solid " + C.blueB, borderRadius: 10, padding: "12px 14px", margin: "8px 0" }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.blue, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>Campaign Setup Checklist</div>
+            {checklistLines.filter(l => l.trim()).map((pl, pi) => <p key={pi} style={{ margin: "3px 0", fontSize: 13, color: C.text, lineHeight: 1.65 }}><Inline text={pl} /></p>)}
+          </div>
+        );
+      }
+      continue;
+    }
+
+    // FINAL STRATEGIC NOTE — special callout
+    if (l.includes("FINAL STRATEGIC NOTE")) {
+      const block = []; i++;
+      while (i < lines.length && lines[i] !== "---" && !lines[i].startsWith("#")) { block.push(lines[i]); i++; }
+      out.push(
+        <div key={"fsn" + i} style={{ background: C.goldL, border: "1px solid #e0cf9a", borderRadius: 11, padding: "14px 16px", margin: "14px 0" }}>
+          <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 9 }}>Final Strategic Note</div>
+          {block.map((bl, bi) => bl.trim() ? <p key={bi} style={{ margin: "3px 0", fontSize: 13, color: C.text, lineHeight: 1.65 }}><Inline text={bl} /></p> : <div key={bi} style={{ height: 5 }} />)}
         </div>
+      );
+      continue;
+    }
+
+    if (!l.trim()) { out.push(<div key={i} style={{ height: 7 }} />); i++; continue; }
+
+    const verdicts = [
+      { re: /^SCALE\b/, bg: C.greenL, bdr: C.greenB, col: C.green },
+      { re: /^ITERATE\b/, bg: C.goldL, bdr: "#e0cf9a", col: C.gold },
+      { re: /^KILL\b/, bg: C.redL, bdr: C.redB, col: C.red },
+      { re: /^FATIGUE\b/, bg: C.purpleL, bdr: C.purpleB, col: C.purple },
+    ];
+    const vt = verdicts.find(v => v.re.test(l));
+    if (vt) { out.push(<div key={i} style={{ display: "inline-flex", background: vt.bg, border: "1px solid " + vt.bdr, borderRadius: 7, padding: "5px 12px", margin: "4px 0", fontSize: 13, color: vt.col, fontWeight: 600 }}><Inline text={l} /></div>); i++; continue; }
+
+    if (l.startsWith("### ")) { out.push(<h3 key={i} style={{ fontSize: 11, fontWeight: 700, color: C.mid, margin: "18px 0 5px", textTransform: "uppercase", letterSpacing: "0.07em" }}>{l.slice(4)}</h3>); i++; continue; }
+    if (l.startsWith("## ")) { out.push(<h2 key={i} style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: "18px 0 7px", borderBottom: "1px solid " + C.border, paddingBottom: 5 }}>{l.slice(3)}</h2>); i++; continue; }
+    if (l.startsWith("# ")) { out.push(<h1 key={i} style={{ fontSize: 18, fontWeight: 700, color: C.text, margin: "0 0 10px" }}>{l.slice(2)}</h1>); i++; continue; }
+    if (l === "---") { out.push(<hr key={i} style={{ border: "none", borderTop: "1px solid " + C.border, margin: "14px 0" }} />); i++; continue; }
+    if (l.startsWith("- ") || l.startsWith("* ")) {
+      const items = [];
+      while (i < lines.length && (lines[i].startsWith("- ") || lines[i].startsWith("* "))) { items.push(<li key={i} style={{ marginBottom: 4, lineHeight: 1.65 }}><Inline text={lines[i].slice(2)} /></li>); i++; }
+      out.push(<ul key={"ul" + i} style={{ paddingLeft: 18, margin: "6px 0", color: C.text }}>{items}</ul>);
+      continue;
+    }
+    if (/^\d+\. /.test(l)) {
+      const items = [];
+      while (i < lines.length && /^\d+\. /.test(lines[i])) { items.push(<li key={i} style={{ marginBottom: 4, lineHeight: 1.65 }}><Inline text={lines[i].replace(/^\d+\. /, "")} /></li>); i++; }
+      out.push(<ol key={"ol" + i} style={{ paddingLeft: 18, margin: "6px 0", color: C.text }}>{items}</ol>);
+      continue;
+    }
+    out.push(<p key={i} style={{ margin: "3px 0", color: C.text, lineHeight: 1.75, fontSize: 14 }}><Inline text={l} /></p>);
+    i++;
+  }
+  return <div>{out}</div>;
+}
+
+function BriefBlock({ content, briefText }) {
+  const [copied, setCopied] = useState(false);
+  const doCopy = () => { copyText(briefText); setCopied(true); setTimeout(() => setCopied(false), 2500); };
+  return (
+    <div style={{ background: C.orangeL, border: "1px solid " + C.orangeB, borderRadius: 11, padding: "14px 16px", margin: "14px 0" }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+        <div style={{ fontSize: 11, fontWeight: 700, color: C.orange, letterSpacing: "0.08em", textTransform: "uppercase" }}>&#8594; Brief for The Creative Room</div>
+        <button onClick={doCopy} style={{ display: "flex", alignItems: "center", gap: 5, background: copied ? C.greenL : C.surface, border: "1px solid " + (copied ? C.greenB : C.orangeB), borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 11, color: copied ? C.green : C.orange, fontWeight: 600, transition: "all 0.2s" }}>
+          <Icon name={copied ? "check" : "creative"} size={11} />
+          {copied ? "Copied!" : "Copy to Creative Room"}
+        </button>
+      </div>
+      {content.map((bl, bi) => bl.trim() ? <p key={bi} style={{ margin: "3px 0", fontSize: 13, color: C.text, lineHeight: 1.65 }}><Inline text={bl} /></p> : <div key={bi} style={{ height: 5 }} />)}
+    </div>
+  );
+}
+
+function Dots() {
+  return <div style={{ display: "flex", gap: 4, alignItems: "center" }}>{[0,1,2].map(i => <div key={i} style={{ width: 5, height: 5, borderRadius: "50%", background: C.dim, animation: "dot 1.2s " + (i*0.2) + "s ease-in-out infinite" }} />)}</div>;
+}
+
+function Bubble({ role, content, imgPreview }) {
+  if (role === "user") return (
+    <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: 12 }}>
+      <div style={{ maxWidth: "74%" }}>
+        {imgPreview && <img src={imgPreview} alt="" style={{ maxWidth: "100%", borderRadius: 10, marginBottom: 5, display: "block" }} />}
+        {content && <div style={{ background: C.text, color: "#fff", borderRadius: "16px 16px 4px 16px", padding: "10px 14px", fontSize: 14, lineHeight: 1.65, whiteSpace: "pre-wrap" }}>{content}</div>}
       </div>
     </div>
   );
-}
+  return (
+    <div style={{ marginBottom: 14, position: "relative" }}>
+      <div style={{ background: C.surface, border: "1px solid " + C.border, borderRadius: "4px 16px 16px 16px", padding: "14px 36px 14px 16px", fontSize: 14 }}>
+        <MD text={content} />
 
-// -- ADD CUSTOMER LANGUAGE COMPONENT -----------------------------------------
-function AddLanguage({which,persona,updP,brand}){
-  const [raw,setRaw]=useState("");
-  const [loading,setLoading]=useState(false);
-  const [done,setDone]=useState(false);
-  const analyse=async()=>{
-    if(!raw.trim())return;
-    setLoading(true);setDone(false);
-    const prompt2="You are a creative strategist. Categorise each insight from these raw customer phrases into: trigger (moment they reach for the product), pain (frustration or failure), desire (outcome they want), objection (hesitation before buying). Use customers exact words. Brand: "+brand.name+". Persona: "+persona.name+".\n\nRaw text:\n"+raw+"\n\nReturn ONLY raw JSON no markdown, no extra text:{\"trigger\":[],\"pain\":[],\"desire\":[],\"objection\":[]}";
-    try{
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":import.meta.env.VITE_ANTHROPIC_API_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,messages:[{role:"user",content:prompt2}]})});
-      const d=await res.json();
-      const txt=(d.content?.[0]?.text||"").replace(/```json|```/g,"").trim();
-      const parsed=JSON.parse(txt);
-      const existing=persona.language&&!Array.isArray(persona.language)?persona.language:{trigger:[],pain:[],desire:[],objection:[]};
-      const merged={
-        trigger:[...new Set([...(existing.trigger||[]),...(parsed.trigger||[])])],
-        pain:[...new Set([...(existing.pain||[]),...(parsed.pain||[])])],
-        desire:[...new Set([...(existing.desire||[]),...(parsed.desire||[])])],
-        objection:[...new Set([...(existing.objection||[]),...(parsed.objection||[])])],
-      };
-      updP(which,"language",merged);
-      setRaw("");setDone(true);setTimeout(()=>setDone(false),3000);
-    }catch(e){console.error(e);}
-    setLoading(false);
-  };
-  return(
-    <div style={{marginTop:10,background:T.goldL,border:"1.5px dashed "+T.goldB,borderRadius:7,padding:"10px 12px"}}>
-      <div style={{fontSize:9,fontWeight:800,letterSpacing:1.5,color:T.gold,textTransform:"uppercase",marginBottom:6}}>Add Customer Language</div>
-      <div style={{fontSize:11,color:T.mid,marginBottom:8,lineHeight:1.5}}>Paste reviews, Reddit comments, TikTok comments. AI categorises and adds to the language bank.</div>
-      <textarea value={raw} onChange={e=>setRaw(e.target.value)} rows={3} placeholder="Paste raw customer language here..."
-        style={{width:"100%",background:T.surface,border:"1px solid "+T.goldB,borderRadius:5,padding:"7px 10px",fontSize:12,color:T.text,fontFamily:"Georgia,serif",resize:"vertical",outline:"none",boxSizing:"border-box",lineHeight:1.6,marginBottom:8}}/>
-      <button onClick={analyse} disabled={loading||!raw.trim()}
-        style={{background:loading||!raw.trim()?T.border:T.text,color:"#fff",border:"none",borderRadius:6,padding:"7px 14px",fontSize:11,fontWeight:800,cursor:loading||!raw.trim()?"default":"pointer"}}>
-        {loading?"Analysing...":done?"Added!":"Analyse + Add"}
-      </button>
+      </div>
+      <div style={{ position: "absolute", top: 6, right: 6 }}><CopyBtn text={content} /></div>
     </div>
   );
 }
 
-// ── STRATEGY DOC TAB ──────────────────────────────────────────────────────────
-function DocTab({brand,set}){
-  const upd=(k,v)=>set(p=>({...p,[k]:v}));
-  const updP=(w,k,v)=>set(p=>({...p,[w]:{...p[w],[k]:v}}));
-  const [genLoading,setGenLoading]=useState({});
-  const [genConcepts,setGenConcepts]=useState({});
+function ImagePicker({ onSelect, current, onClear }) {
+  const ref = useRef();
+  const load = (f) => {
+    if (!f || !f.type.startsWith("image/")) return;
+    const r = new FileReader();
+    r.onload = e => onSelect({ data: e.target.result.split(",")[1], preview: e.target.result, type: f.type });
+    r.readAsDataURL(f);
+  };
+  if (current) return (
+    <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 10px", background: C.blueL, border: "1px solid " + C.blueB, borderRadius: 8, fontSize: 12, color: C.blue }}>
+      <img src={current.preview} alt="" style={{ width: 28, height: 28, objectFit: "cover", borderRadius: 5 }} />
+      <span style={{ flex: 1, fontWeight: 500 }}>Image attached</span>
+      <button onClick={onClear} style={{ background: "none", border: "none", cursor: "pointer", color: C.blue, display: "flex" }}><Icon name="close" size={14} /></button>
+    </div>
+  );
+  return (
+    <div onClick={() => ref.current.click()} onDrop={e => { e.preventDefault(); load(e.dataTransfer.files[0]); }} onDragOver={e => e.preventDefault()}
+      style={{ border: "1.5px dashed " + C.border, borderRadius: 8, padding: "7px 12px", cursor: "pointer", display: "flex", alignItems: "center", gap: 6, color: C.dim, fontSize: 12 }}>
+      <Icon name="image" size={14} /> Upload screenshot or image
+      <input ref={ref} type="file" accept="image/*" style={{ display: "none" }} onChange={e => load(e.target.files[0])} />
+    </div>
+  );
+}
 
-  const generateConcepts=async(stage)=>{
-    setGenLoading(p=>({...p,[stage]:true}));
-    const prompt=`Generate 3 creative ad concepts for this brand at the ${stage} awareness stage.
+// ─── BRAND PROFILES ──────────────────────────────────────────────────────────
+function useBrands() {
+  const [brands, setBrands] = useState([]);
+  const save = (name, context, editId) => {
+    setBrands(prev => editId
+      ? prev.map(b => b.id === editId ? { ...b, name, context, updatedAt: Date.now() } : b)
+      : [...prev, { id: Date.now().toString(), name, context, updatedAt: Date.now() }]
+    );
+  };
+  const remove = (id) => setBrands(prev => prev.filter(b => b.id !== id));
+  return { brands, save, remove };
+}
 
-Brand: ${brand.name}
-Organising Idea: ${brand.organising_idea}
-Primary Principle: ${brand.primary_principle}
-Core Persona: ${brand.core_persona?.name} — ${brand.core_persona?.desc}
-Desire: ${brand.core_persona?.desire}
-Pain: ${brand.core_persona?.pain}
-Proof Points: ${(brand.proof_points||[]).join(", ")}
-White Space: ${brand.white_space}
-Awareness Stage: ${stage} — ${AWARENESS_DEFS[stage]}
-Relevant Angles for this stage: ${(AW_ANGLES[stage]||[]).join(", ")}
+// ─── CONTEXT PANEL ───────────────────────────────────────────────────────────
+// ─── HOOK LIBRARY STATE ───────────────────────────────────────────────────────
+function useHookLibrary() {
+  const [library, setLibrary] = useState([]);
+  const saveHooks = (sourceAd, hookType, hooks, brand) => {
+    if (!hooks?.length) return;
+    const entry = { id: Date.now() + Math.random(), savedAt: new Date().toISOString(), sourceAd: sourceAd || "Unknown ad", hookType: hookType || "General", brand: brand || "", hooks };
+    setLibrary(prev => [entry, ...prev]);
+  };
+  const deleteEntry = (id) => setLibrary(prev => prev.filter(e => e.id !== id));
+  const deleteHook = (entryId, hookIdx) => setLibrary(prev =>
+    prev.map(e => e.id === entryId ? { ...e, hooks: e.hooks.filter((_, i) => i !== hookIdx) } : e).filter(e => e.hooks.length > 0)
+  );
+  return { library, saveHooks, deleteEntry, deleteHook };
+}
 
-Return ONLY raw JSON array, no markdown:
-[{"name":"concept name (specific, memorable)","persuasion":"Feeling First or Understanding First or Proof First","persona":"${brand.core_persona?.name||"Core Persona"}","awareness":"${stage}","angle":"which angle from the list","trigger":"psychology trigger","aha":"the single sentence where the viewer shifts from interested to convinced","example":"one sentence describing what this ad would actually look like — what you see and hear in the first 5 seconds"}]`;
-    try{
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":import.meta.env.VITE_ANTHROPIC_API_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,messages:[{role:"user",content:prompt}]})});
-      const d=await res.json();
-      const raw=(d.content?.[0]?.text||"").replace(/```json|```/g,"").trim();
-      setGenConcepts(p=>({...p,[stage]:JSON.parse(raw)}));
-    }catch{setGenConcepts(p=>({...p,[stage]:[{name:"Error",persuasion:"",persona:"",awareness:stage,angle:"",trigger:"",aha:"Could not generate. Try again.",example:""}]}));}
-    setGenLoading(p=>({...p,[stage]:false}));
+// ─── HOOK PARSER — extracts hooks from Dissect P2 response ───────────────────
+function parseHooksFromResponse(text) {
+  const hooks = [];
+  const lines = text.split("\n");
+  let currentCategory = "General";
+  let currentPhase = "";
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    // Category headers like "CATEGORY 1: SEXUAL TABOO" or "## RELATIONSHIP TABOO"
+    const catMatch = l.match(/^(?:CATEGORY\s*\d+[:.]\s*)(.+)/i) || l.match(/^#{1,3}\s+(.+)$/);
+    if (catMatch && !l.match(/^Hook\s/i) && !l.startsWith("-")) {
+      const candidate = catMatch[1].replace(/[*_`]/g, "").trim();
+      if (candidate.length > 3 && candidate.length < 80) { currentCategory = candidate; continue; }
+    }
+    // Phase: lines
+    const phaseMatch = l.match(/^Phase[:\s]+(.+)/i);
+    if (phaseMatch && !l.match(/^Hook\s/i)) { currentPhase = phaseMatch[1].replace(/[*_]/g, "").trim(); continue; }
+    // Hook N: "text" — or Hook N (next line has text)
+    const hMatch = l.match(/^(?:Hook\s*\d+[:.]\s*|Option\s*\d+[:.]\s*)(.+)/i);
+    if (hMatch) {
+      let txt = hMatch[1].replace(/^["']|["']$/g, "").replace(/[*_]/g, "").trim();
+      // if the captured text is short/empty, look at next line
+      if (txt.length < 5 && i + 1 < lines.length) {
+        txt = lines[i+1].replace(/^["'\s*-]+|["'\s]+$/g, "").trim();
+        i++;
+      }
+      if (txt.length > 5) hooks.push({ category: currentCategory, text: txt, phase: currentPhase });
+      continue;
+    }
+    // Quoted lines that look like hooks
+    const qMatch = l.match(/^"([^"]{10,})"$/) || l.match(/^'([^']{10,})'$/);
+    if (qMatch) hooks.push({ category: currentCategory, text: qMatch[1].trim(), phase: currentPhase });
+  }
+  return hooks;
+}
+
+function ContextPanel({ context, onContext, brands, onSaveBrand, onDeleteBrand, onClose }) {
+  const [tab, setTab] = useState("context");
+  const [draft, setDraft] = useState(context);
+  const [fileName, setFileName] = useState("");
+  const [fileLoading, setFileLoading] = useState(false);
+  const [fileError, setFileError] = useState("");
+  const [brandName, setBrandName] = useState("");
+  const [editId, setEditId] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const fileRef = useRef();
+
+  const handleFile = async (f) => {
+    if (!f) return;
+    setFileLoading(true); setFileError(""); setFileName(f.name);
+    try {
+      const text = await parseFile(f);
+      if (!text?.trim()) throw new Error("Could not extract text from this file.");
+      // REPLACE draft entirely with file content — don't append
+      setDraft(text);
+    } catch (e) { setFileError(e.message || "Failed to read file."); setFileName(""); }
+    setFileLoading(false);
   };
 
-  const saveConcept=c=>set(p=>({...p,concepts:[...(p.concepts||[]),c]}));
-  const removeConcept=i=>set(p=>({...p,concepts:p.concepts.filter((_,idx)=>idx!==i)}));
+  const saveCtx = () => { onContext(draft); onClose(); };
+  const saveBrand = () => {
+    if (!brandName.trim() || !draft.trim()) return;
+    setSaving(true);
+    onSaveBrand(brandName.trim(), draft.trim(), editId);
+    setTimeout(() => { setSaving(false); setBrandName(""); setEditId(null); setTab("brands"); }, 400);
+  };
+  const loadBrand = (b) => { setDraft(b.context); setFileName(""); setFileError(""); setBrandName(""); setEditId(null); onContext(b.context); setTab("context"); };
+  const startEdit = (b) => { setDraft(b.context); setBrandName(b.name); setEditId(b.id); setFileName(""); setFileError(""); setTab("context"); };
 
-  const PersonaBlock=({which,color,bg})=>{
-    const p=brand[which]||{};
-    return(
-      <div style={{background:bg,border:`1px solid ${color}25`,borderRadius:8,padding:"14px 18px",marginBottom:16}}>
-        <div style={{display:"flex",gap:12,flexWrap:"wrap"}}>
-          <div style={{flex:2,minWidth:130}}><FInput label="Name" value={p.name||""} onChange={v=>updP(which,"name",v)} placeholder="e.g. Sara"/></div>
-          <div style={{flex:1,minWidth:80}}><FInput label="Age" value={p.age||""} onChange={v=>updP(which,"age",v)} placeholder="28"/></div>
+  return (
+    <div style={{ background: C.surface, border: "1px solid " + C.border, borderRadius: 14, marginBottom: 18, overflow: "hidden", boxShadow: "0 4px 20px rgba(0,0,0,0.06)" }}>
+      <div style={{ display: "flex", borderBottom: "1px solid " + C.border }}>
+        {[{ id: "context", label: "Brand Context" }, { id: "brands", label: "Saved Brands (" + brands.length + ")" }].map(t => (
+          <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: "11px 0", border: "none", borderBottom: tab === t.id ? "2px solid " + C.text : "2px solid transparent", background: tab === t.id ? C.surface : C.warm, cursor: "pointer", fontSize: 13, fontWeight: tab === t.id ? 600 : 400, color: tab === t.id ? C.text : C.mid }}>{t.label}</button>
+        ))}
+        <button onClick={onClose} style={{ padding: "11px 14px", border: "none", background: C.warm, cursor: "pointer", color: C.dim, display: "flex", alignItems: "center", borderLeft: "1px solid " + C.border }}><Icon name="close" size={14} /></button>
+      </div>
+
+      {tab === "context" && (
+        <div style={{ padding: 16 }}>
+          <p style={{ fontSize: 12, color: C.mid, margin: "0 0 12px", lineHeight: 1.5 }}>Add context to make every mode specific to your brand.</p>
+          <div onClick={() => !fileLoading && fileRef.current.click()} onDrop={e => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); }} onDragOver={e => e.preventDefault()}
+            style={{ border: "1.5px dashed " + (fileError ? C.red : C.border), borderRadius: 9, padding: "11px 14px", cursor: fileLoading ? "default" : "pointer", display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}
+            onMouseEnter={e => { if (!fileLoading) { e.currentTarget.style.borderColor = C.blue; e.currentTarget.style.background = C.blueL; } }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = fileError ? C.red : C.border; e.currentTarget.style.background = "transparent"; }}>
+            <Icon name={fileLoading ? "upload" : "file"} size={15} />
+            <span style={{ fontSize: 12, color: fileLoading ? C.gold : fileError ? C.red : fileName ? C.text : C.dim, flex: 1 }}>
+              {fileLoading ? "Reading " + fileName + "..." : fileError ? fileError : fileName ? "Loaded: " + fileName : "Upload .pdf, .docx, .txt, .md, .csv — or drag and drop"}
+            </span>
+            {fileName && !fileLoading && !fileError && <button onClick={e => { e.stopPropagation(); setFileName(""); setDraft(""); }} style={{ background: "none", border: "none", cursor: "pointer", color: C.dim, display: "flex", padding: 0 }}><Icon name="close" size={13} /></button>}
+            <input ref={fileRef} type="file" accept=".txt,.md,.csv,.json,.pdf,.doc,.docx" style={{ display: "none" }} onChange={e => handleFile(e.target.files[0])} />
+          </div>
+          <textarea value={draft} onChange={e => setDraft(e.target.value)} placeholder="Or paste your strategy export, brand inputs, brief, or describe your brand..." rows={5} style={{ width: "100%", boxSizing: "border-box", resize: "vertical", border: "1px solid " + C.border, borderRadius: 8, padding: "9px 12px", fontSize: 13, color: C.text, background: C.bg, outline: "none", fontFamily: "inherit", lineHeight: 1.5 }} />
+          <div style={{ marginTop: 10, padding: "10px 12px", background: C.goldL, border: "1px solid #e0cf9a", borderRadius: 9 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, color: C.gold, textTransform: "uppercase", letterSpacing: "0.07em", marginBottom: 7 }}>{editId ? "Update saved brand" : "Save as brand profile"}</div>
+            <div style={{ display: "flex", gap: 7 }}>
+              <input value={brandName} onChange={e => setBrandName(e.target.value)} onKeyDown={e => e.key === "Enter" && saveBrand()} placeholder={editId ? "Update brand name..." : "Brand name..."} style={{ flex: 1, border: "1px solid #e0cf9a", borderRadius: 7, padding: "6px 10px", fontSize: 12, color: C.text, background: C.surface, outline: "none", fontFamily: "inherit" }} />
+              <button onClick={saveBrand} disabled={!brandName.trim() || !draft.trim()} style={{ background: brandName.trim() && draft.trim() ? C.gold : C.border, color: brandName.trim() && draft.trim() ? "#fff" : C.dim, border: "none", borderRadius: 7, padding: "6px 12px", cursor: brandName.trim() && draft.trim() ? "pointer" : "not-allowed", fontSize: 12, fontWeight: 600 }}>
+                {saving ? "Saved!" : editId ? "Update" : "Save"}
+              </button>
+              {editId && <button onClick={() => { setEditId(null); setBrandName(""); }} style={{ background: "none", border: "1px solid #e0cf9a", borderRadius: 7, padding: "6px 10px", cursor: "pointer", fontSize: 12, color: C.gold }}>Cancel</button>}
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+            <button onClick={saveCtx} style={{ background: C.text, color: "#fff", border: "none", borderRadius: 7, padding: "7px 16px", cursor: "pointer", fontSize: 13, fontWeight: 600 }}>Use this context</button>
+            <button onClick={() => { setDraft(""); onContext(""); setFileName(""); setEditId(null); }} style={{ background: "none", border: "1px solid " + C.border, borderRadius: 7, padding: "7px 12px", cursor: "pointer", fontSize: 13, color: C.mid }}>Clear</button>
+          </div>
         </div>
-        <FInput label="Description" value={p.desc||""} onChange={v=>updP(which,"desc",v)} multi placeholder="Who is this person, their daily reality..."/>
-        <FInput label="Primary Desire" value={p.desire||""} onChange={v=>updP(which,"desire",v)} placeholder="What do they want most?"/>
-        <FInput label="Primary Pain" value={p.pain||""} onChange={v=>updP(which,"pain",v)} placeholder="What problem are they experiencing?"/>
-        <Lbl>Language Bank (auto-categorised by AI)</Lbl>
-        {(()=>{
-          const lang=p.language||{};
-          const isFlat=Array.isArray(lang);
-          const catColors={"trigger":T.orange,"pain":T.red,"desire":T.green,"objection":T.purple};
-          const catLabels={"trigger":"Trigger","pain":"Pain","desire":"Desire","objection":"Objection"};
-          if(isFlat){
-            return [...lang,""].map((ph,i)=>(
-              <input key={i} value={ph}
-                onChange={e=>{const arr=[...lang];if(i===arr.length)arr.push(e.target.value);else arr[i]=e.target.value;updP(which,"language",arr.filter(x=>x));}}
-                placeholder="Exact customer phrase..."
-                style={{width:"100%",background:T.surface,border:"1px solid "+T.border,borderRadius:5,padding:"6px 10px",fontSize:12,fontStyle:"italic",color:T.mid,outline:"none",fontFamily:"Georgia,serif",marginBottom:6,boxSizing:"border-box"}}/>
-            ));
-          }
-          return Object.entries(lang).map(([cat,phrases])=>phrases.length>0&&(
-            <div key={cat} style={{marginBottom:6}}>
-              <div style={{fontSize:9,fontWeight:800,letterSpacing:1.5,color:catColors[cat],textTransform:"uppercase",marginBottom:3}}>{catLabels[cat]}</div>
-              {phrases.map((ph,i)=>(
-                <div key={i} style={{display:"flex",alignItems:"center",gap:6,marginBottom:3}}>
-                  <div style={{width:5,height:5,borderRadius:"50%",background:catColors[cat],flexShrink:0}}/>
-                  <div style={{fontSize:12,color:T.mid,fontStyle:"italic",lineHeight:1.4}}>{ph}</div>
+      )}
+
+      {tab === "brands" && (
+        <div style={{ padding: 16 }}>
+          {brands.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "28px 0" }}>
+              <div style={{ color: C.dim, fontSize: 13, marginBottom: 8 }}>No saved brands yet.</div>
+              <button onClick={() => setTab("context")} style={{ fontSize: 12, color: C.blue, background: "none", border: "none", cursor: "pointer" }}>Add brand context to get started</button>
+            </div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {brands.map(b => (
+                <div key={b.id} style={{ border: "1px solid " + C.border, borderRadius: 10, padding: "12px 14px", display: "flex", alignItems: "center", gap: 10 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: 8, background: C.goldL, display: "flex", alignItems: "center", justifyContent: "center", color: C.gold, flexShrink: 0 }}><Icon name="brand" size={15} /></div>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{b.name}</div>
+                    <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>{b.context.slice(0, 65).replace(/\n/g, " ")}...</div>
+                  </div>
+                  <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+                    <button onClick={() => loadBrand(b)} style={{ background: C.blueL, border: "1px solid " + C.blueB, borderRadius: 6, padding: "4px 10px", cursor: "pointer", fontSize: 11, color: C.blue, fontWeight: 600 }}>Load</button>
+                    <button onClick={() => startEdit(b)} style={{ background: "none", border: "1px solid " + C.border, borderRadius: 6, padding: "4px 7px", cursor: "pointer", color: C.mid, display: "flex", alignItems: "center" }}><Icon name="edit" size={12} /></button>
+                    <button onClick={() => onDeleteBrand(b.id)} style={{ background: "none", border: "1px solid " + C.redB, borderRadius: 6, padding: "4px 7px", cursor: "pointer", color: C.red, display: "flex", alignItems: "center" }}><Icon name="trash" size={12} /></button>
+                  </div>
                 </div>
               ))}
             </div>
-          ));
-        })()}
-        <AddLanguage which={which} persona={p} updP={updP} brand={brand}/>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CHAT INPUT ───────────────────────────────────────────────────────────────
+function ChatInput({ onSend, loading, imgUpload, placeholder }) {
+  const [val, setVal] = useState("");
+  const [img, setImg] = useState(null);
+  const ref = useRef();
+  const canSend = (val.trim() || img) && !loading;
+  const submit = () => {
+    if (!canSend) return;
+    onSend(val.trim(), img);
+    setVal(""); setImg(null);
+    if (ref.current) ref.current.style.height = "auto";
+  };
+  return (
+    <div style={{ borderTop: "1px solid " + C.border, background: C.surface, padding: "10px 14px", display: "flex", flexDirection: "column", gap: 8, flexShrink: 0 }}>
+      {imgUpload && <ImagePicker current={img} onSelect={setImg} onClear={() => setImg(null)} />}
+      <div style={{ display: "flex", gap: 8, alignItems: "flex-end" }}>
+        <textarea ref={ref} value={val}
+          onChange={e => { setVal(e.target.value); e.target.style.height = "auto"; e.target.style.height = Math.min(e.target.scrollHeight, 130) + "px"; }}
+          onKeyDown={e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); } }}
+          placeholder={placeholder || "Type your message..."}
+          rows={1}
+          style={{ flex: 1, resize: "none", border: "1px solid " + C.border, borderRadius: 10, padding: "9px 12px", fontSize: 14, color: C.text, background: C.bg, outline: "none", fontFamily: "inherit", lineHeight: 1.5, maxHeight: 130, overflowY: "auto" }}
+        />
+        <button onClick={submit} disabled={!canSend} style={{ width: 40, height: 40, borderRadius: 10, border: "none", background: canSend ? C.text : C.border, color: canSend ? "#fff" : C.dim, cursor: canSend ? "pointer" : "not-allowed", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+          {loading ? <Dots /> : <Icon name="send" size={15} />}
+        </button>
       </div>
-    );
+    </div>
+  );
+}
+
+// ─── MODE CONFIG ─────────────────────────────────────────────────────────────
+const MODE_CFG = {
+  launch:  { label: "Launch",  color: C.blue,   system: SYS_LAUNCH,   imgUpload: false, starter: "Let's build your test architecture before you spend a cent.\n\nFirst — is this a brand new ad account, or do you have existing campaigns running?", ph: "Type your answer..." },
+  diagnose:{ label: "Diagnose",color: C.purple, system: SYS_DIAGNOSE, imgUpload: false, starter: "Paste your data — any format works. Ads Manager table, CSV, spreadsheet copy, or typed numbers.\n\nI'll parse it and run the funnel diagnosis layer by layer.", ph: "Paste your metrics here..." },
+  report:  { label: "Report",  color: C.green,  system: SYS_REPORT,   imgUpload: false, starter: "Let's build your internal report. Do you have Diagnose output to build from, or are you starting from raw data?", ph: "Paste Diagnose output or describe what ran..." },
+  dissect: { label: "Dissect", color: C.orange, system: SYS_DISSECT_P1, p2system: SYS_DISSECT_P2, imgUpload: true, starter: "Drop in the ad you want to reverse-engineer.\n\nUpload a screenshot, describe what you saw, or paste a URL and tell me what happened. I'll break down exactly why it works — hook, angle, psychology, format logic, all of it.", ph: "Describe the ad or upload a screenshot..." },
+};
+
+// ─── MODE CHAT ────────────────────────────────────────────────────────────────
+function ModeChat({ mode, onBack, context, msgs, setMsgs, onSaveHooks, onViewLibrary }) {
+  const cfg = MODE_CFG[mode];
+  const [loading, setLoading] = useState(false);
+  // dissect: "p1" = awaiting ad input, "awaiting" = P1 done, "p2" = brand version
+  const [dissectPhase, setDissectPhase] = useState("p1");
+  // Sync dissectPhase from session msgs on mount so it survives Back navigation
+  useEffect(() => {
+    if (mode !== "dissect") return;
+    const userMsgs = msgs.filter(m => m.role === "user");
+    const assistantMsgs = msgs.filter(m => m.role === "assistant");
+    // p2: user clicked brand version (2+ user msgs)
+    if (userMsgs.length >= 2) setDissectPhase("p2");
+    // awaiting: P1 done — exactly 1 user msg and P1 response received
+    else if (userMsgs.length === 1 && assistantMsgs.length >= 2) setDissectPhase("awaiting");
+    else setDissectPhase("p1");
+  }, []);
+  const [savedHooks, setSavedHooks] = useState(false);
+  const bottomRef = useRef();
+  const scrollToBottom = () => { requestAnimationFrame(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }); };
+  useEffect(scrollToBottom, [msgs]);
+
+  const toApi = m => {
+    if (m.img) return { role: m.role, content: [{ type: "image", source: { type: "base64", media_type: m.img.type, data: m.img.data } }, ...(m.content ? [{ type: "text", text: m.content }] : [])] };
+    return { role: m.role, content: m.content };
   };
 
-  const PERSUASION_COLORS={"Feeling First":{c:T.gold,bg:T.goldL,b:T.goldB},"Understanding First":{c:T.blue,bg:T.blueL,b:T.blue},"Proof First":{c:T.purple,bg:T.purpleL,b:T.purple}};
+  const getSystem = (phase) => {
+    if (mode !== "dissect") {
+      return context ? cfg.system + "\n\nBRAND CONTEXT:\n" + context : cfg.system;
+    }
+    const base = phase === "p2" ? cfg.p2system : cfg.system;
+    return context ? base + "\n\nBRAND CONTEXT:\n" + context : base;
+  };
 
-  return(
-    <div style={{maxWidth:700,margin:"0 auto"}}>
-      <div style={{fontSize:15,fontWeight:800,color:T.text,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${T.border}`}}>1 — Strategic Foundation</div>
-      <FInput label="Brand Name" value={brand.name||""} onChange={v=>upd("name",v)} placeholder="Brand name..."/>
-      <FInput label="Organising Idea" value={brand.organising_idea||""} onChange={v=>upd("organising_idea",v)} multi placeholder="The single central thought that ties everything together..."/>
-      <FInput label="Strategic Tension" value={brand.strategic_tension||""} onChange={v=>upd("strategic_tension",v)} multi placeholder="The core contradiction strategy must resolve..."/>
-      <FInput label="White Space" value={brand.white_space||""} onChange={v=>upd("white_space",v)} multi placeholder="What nobody in the category is currently owning..."/>
-      <div style={{marginBottom:16}}>
-        <Lbl>Primary Organising Principle</Lbl>
-        <ChoiceGrid options={[{label:"Pain-First",sub:"Lead with the problem. People searching for relief."},{label:"Desire-First",sub:"Lead with the vision. People drawn to an identity."}]} selected={brand.primary_principle} onSelect={v=>upd("primary_principle",v)}/>
-        {brand.primary_principle&&<div style={{fontSize:12,color:T.mid,background:T.warm,borderRadius:6,padding:"8px 12px",marginTop:-6,lineHeight:1.6}}>
-          {brand.primary_principle==="Pain-First"?"Your creative leads with the problem first — make them feel the pain before you offer the solution. Angles like Failed Solutions, Consequences, and Objections work well here.":"Your creative leads with who they want to become — the identity, ritual, or desire. Make them see themselves in the ad before the product appears. Angles like Identity, Desired Outcome, and Acceptance work well here."}
-        </div>}
-      </div>
-      <Divider/>
+  const runCall = async (history, phase) => {
+    setLoading(true);
+    scrollToBottom();
+    try {
+      const reply = await callClaude(history.slice(1).map(toApi), getSystem(phase), mode);
+      setMsgs([...history, { role: "assistant", content: reply }]);
+      if (mode === "dissect" && phase === "p1") setDissectPhase("awaiting");
+    } catch (e) {
+      setMsgs([...history, { role: "assistant", content: "Error: " + e.message }]);
+    }
+    setLoading(false);
+    scrollToBottom();
+  };
 
-      <div style={{fontSize:15,fontWeight:800,color:T.text,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${T.border}`}}>2 — Core Persona <span style={{fontSize:11,fontWeight:500,color:T.dim}}>Phase 1</span></div>
-      <PersonaBlock which="core_persona" color={T.green} bg={T.greenL}/>
+  const send = async (text, img) => {
+    const userMsg = { role: "user", content: text, img: img || null };
+    const history = [...msgs, userMsg];
+    setMsgs(history);
+    let phase = dissectPhase;
+    // If awaiting and user says yes/show/go, switch to p2
+    if (mode === "dissect" && dissectPhase === "awaiting") {
+      const lower = text.toLowerCase();
+      if (lower.match(/\b(yes|yeah|sure|show|go|please|do it|yep|absolutely)\b/)) {
+        phase = "p2";
+        setDissectPhase("p2");
+      }
+    }
+    await runCall(history, phase);
+  };
 
-      <div style={{fontSize:15,fontWeight:800,color:T.text,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${T.border}`}}>3 — Secondary Persona <span style={{fontSize:11,fontWeight:500,color:T.dim}}>Phase 2</span></div>
-      <PersonaBlock which="secondary_persona" color={T.blue} bg={T.blueL}/>
-      <Divider/>
+  const showBrandVersion = async () => {
+    if (loading) return;
+    const userMsg = { role: "user", content: "Yes, show me how this would work for my brand." };
+    const history = [...msgs, userMsg];
+    setMsgs(history);
+    setDissectPhase("p2");
+    await runCall(history, "p2");
+  };
 
-      <div style={{fontSize:15,fontWeight:800,color:T.text,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${T.border}`}}>4 — Proof Points</div>
-      {[...(brand.proof_points||[]),""].map((pt,i)=>(
-        <input key={i} value={pt} onChange={e=>{const arr=[...(brand.proof_points||[])];if(i===arr.length)arr.push(e.target.value);else arr[i]=e.target.value;upd("proof_points",arr.filter(x=>x));}} placeholder={`Proof point ${i+1}...`}
-          style={{width:"100%",background:T.surface,border:`1px solid ${T.border}`,borderRadius:5,padding:"7px 11px",fontSize:12,color:T.text,outline:"none",fontFamily:"Georgia,serif",marginBottom:7,boxSizing:"border-box"}}/>
-      ))}
-      <Divider/>
+  const copySession = () => {
+    const t = msgs.filter(m => m.role === "assistant").map(m => m.content).join("\n\n---\n\n");
+    copyText(t);
+  };
 
-      <div style={{fontSize:15,fontWeight:800,color:T.text,marginBottom:6,paddingBottom:8,borderBottom:`2px solid ${T.border}`}}>5 — Concepts by Awareness Stage</div>
-      <div style={{fontSize:12,color:T.mid,marginBottom:16,lineHeight:1.6}}>Generate concept ideas per awareness stage. Save the ones you want to develop, then run them through Hook Builder.</div>
+  const newSession = () => {
+    setDissectPhase("p1");
+    setSavedHooks(false);
+    setMsgs([{ role: "assistant", content: (context ? "**Brand context loaded.**\n\n" : "") + cfg.starter }]);
+  };
 
-      {AWARENESS.map(stage=>{
-        const cols={Unaware:{c:T.red,bg:T.redL,b:T.red},"Problem Aware":{c:T.orange,bg:T.orangeL,b:T.orange},"Solution Aware":{c:T.gold,bg:T.goldL,b:T.goldB},"Product Aware":{c:T.blue,bg:T.blueL,b:T.blue},"Most Aware":{c:T.green,bg:T.greenL,b:T.green}}[stage]||{c:T.dim,bg:T.warm,b:T.border};
-        const concepts=genConcepts[stage]||[];
-        return(
-          <div key={stage} style={{background:T.surface,border:`1.5px solid ${T.border}`,borderLeft:`4px solid ${cols.c}`,borderRadius:8,marginBottom:12,overflow:"hidden"}}>
-            <div style={{padding:"12px 16px",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-              <div>
-                <div style={{fontSize:13,fontWeight:800,color:cols.c}}>{stage}</div>
-                <div style={{fontSize:11,color:T.dim,marginTop:2}}>{AWARENESS_DEFS[stage]}</div>
-              </div>
-              <Btn onClick={()=>generateConcepts(stage)} disabled={genLoading[stage]} variant="secondary" style={{fontSize:11}}>
-                {genLoading[stage]?"Generating...":"Generate Concepts"}
-              </Btn>
-            </div>
-            {concepts.length>0&&(
-              <div style={{borderTop:`1px solid ${T.border}`,padding:"12px 16px"}}>
-                {concepts.map((c,i)=>{
-                  const pc=PERSUASION_COLORS[c.persuasion]||{c:T.dim,bg:T.warm,b:T.border};
-                  const alreadySaved=(brand.concepts||[]).some(x=>x.name===c.name);
-                  return(
-                    <div key={i} style={{background:cols.bg,border:`1px solid ${cols.b}30`,borderRadius:7,padding:"12px 14px",marginBottom:8}}>
-                      <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10,marginBottom:8,flexWrap:"wrap"}}>
-                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                          <div style={{fontSize:13,fontWeight:800,color:cols.c}}>{c.name}</div>
-                          <Chip label={c.persuasion} color={pc.c} bg={pc.bg} border={pc.b}/>
-                          <Chip label={c.angle} color={T.mid} bg={T.warm} border={T.border}/>
-                        </div>
-                        {!alreadySaved&&<Btn onClick={()=>saveConcept(c)} variant="secondary" style={{fontSize:11,padding:"5px 12px"}}>Save -></Btn>}
-                        {alreadySaved&&<span style={{fontSize:11,color:T.green,fontWeight:700}}>v Saved</span>}
-                      </div>
-                      <div style={{fontSize:12,color:T.mid,marginBottom:6,lineHeight:1.5}}><b style={{color:cols.c}}>Aha: </b>{c.aha}</div>
-                      <div style={{fontSize:11,color:T.mid,fontStyle:"italic",lineHeight:1.5,borderLeft:`2px solid ${cols.b}`,paddingLeft:8}}>{c.example}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
+  const lastMsg = msgs[msgs.length - 1];
+  const showBrandPrompt = mode === "dissect" && dissectPhase === "awaiting" && lastMsg?.role === "assistant" && !loading;
+
+  // Simple hook extractor — finds quoted strings and short punchy lines
+  const extractHooksSimple = (text) => {
+    const hooks = [];
+    const lines = text.split("\n");
+    let category = "Hooks";
+    for (const line of lines) {
+      const clean = line.replace(/\*\*/g, "").replace(/[*_`]/g, "").trim();
+      if (clean.match(/^(CATEGORY|##)\s*\d*/i) && clean.length < 80) {
+        category = clean.replace(/^(CATEGORY|##)\s*\d*[:.]\s*/i, "").trim() || category;
+        continue;
+      }
+      const labeled = clean.match(/^(?:Hook|Option)\s*\d+[:.]\s*(.+)/i);
+      if (labeled) { const t = labeled[1].replace(/^["']|["']$/g, "").trim(); if (t.length > 8) hooks.push({ category, text: t, phase: "" }); continue; }
+      const quoted = clean.match(/^["'](.{8,120})["']$/);
+      if (quoted) { hooks.push({ category, text: quoted[1].trim(), phase: "" }); continue; }
+      const bulletQ = clean.match(/^[-•]\s*["'](.{8,120})["']/);
+      if (bulletQ) { hooks.push({ category, text: bulletQ[1].trim(), phase: "" }); }
+    }
+    return hooks;
+  };
+
+  const saveParsedHooks = () => {
+    const lastSubstantive = [...msgs].reverse().find(m =>
+      m.role === "assistant" && m.content && m.content.length > 100
+    );
+    if (!lastSubstantive) return;
+    const firstUserMsg = msgs.find(m => m.role === "user");
+    const sourceAd = firstUserMsg?.content?.slice(0, 80) || "Dissected ad";
+    const brand = context ? context.split("\n")[0].slice(0, 40) : "";
+    let hooks = parseHooksFromResponse(lastSubstantive.content);
+    if (hooks.length === 0) hooks = extractHooksSimple(lastSubstantive.content);
+    if (hooks.length === 0) {
+      hooks = [{ category: "Full response", text: lastSubstantive.content, phase: "" }];
+    }
+    onSaveHooks(sourceAd, "Dissect", hooks, brand);
+    setSavedHooks(true);
+    setTimeout(() => setSavedHooks(false), 3000);
+  };
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.bg }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: "1px solid " + C.border, background: C.surface, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: C.mid, display: "flex", alignItems: "center", gap: 4, fontSize: 13, padding: 0 }}>
+            <Icon name="back" size={14} /> Back
+          </button>
+          <div style={{ width: 1, height: 14, background: C.border }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: cfg.color }} />
+            <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>{cfg.label}</span>
           </div>
-        );
-      })}
+          {context && <div style={{ fontSize: 11, color: C.green, background: C.greenL, border: "1px solid " + C.greenB, borderRadius: 5, padding: "2px 7px" }}>Context active</div>}
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {mode === "dissect" && msgs.some(m => m.role === "assistant" && m.content.length > 200) && (
+            <button onClick={saveParsedHooks} style={{ display: "flex", alignItems: "center", gap: 4, background: savedHooks ? C.greenL : C.orangeL, border: "1px solid " + (savedHooks ? C.greenB : C.orangeB), borderRadius: 7, padding: "4px 10px", cursor: "pointer", fontSize: 12, color: savedHooks ? C.green : C.orange, fontWeight: 600, transition: "all 0.2s" }}>
+              <Icon name={savedHooks ? "check" : "creative"} size={12} /> {savedHooks ? "Saved!" : "Save to library"}
+            </button>
+          )}
+          <button onClick={newSession} style={{ display: "flex", alignItems: "center", gap: 4, background: C.warm, border: "1px solid " + C.border, borderRadius: 7, padding: "4px 10px", cursor: "pointer", fontSize: 12, color: C.mid }}>
+            <Icon name="new" size={12} /> New session
+          </button>
+          <button onClick={copySession} style={{ display: "flex", alignItems: "center", gap: 4, background: C.warm, border: "1px solid " + C.border, borderRadius: 7, padding: "4px 10px", cursor: "pointer", fontSize: 12, color: C.mid }}>
+            <Icon name="copy" size={12} /> Copy session
+          </button>
+        </div>
+      </div>
+      <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 4px" }}>
+        {msgs.map((m, i) => (
+          <Bubble key={i} role={m.role} content={m.content} imgPreview={m.img?.preview} />
+        ))}
+        {loading && (
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ background: C.surface, border: "1px solid " + C.border, borderRadius: "4px 16px 16px 16px", padding: "12px 16px", display: "inline-flex", alignItems: "center", gap: 8, color: C.dim, fontSize: 13 }}>
+              <Dots /> {mode === "dissect" && dissectPhase === "p2" ? "Building your brand's version..." : "Analysing..."}
+            </div>
+          </div>
+        )}
+        {showBrandPrompt && (
+          <div style={{ marginBottom: 16, display: "flex", alignItems: "center", gap: 10, paddingLeft: 2 }}>
+            <button onClick={showBrandVersion} style={{ background: C.orange, color: "#fff", border: "none", borderRadius: 9, padding: "10px 18px", cursor: "pointer", fontSize: 13, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+              <Icon name="creative" size={13} /> Yes — show me my brand's version
+            </button>
+            <span style={{ fontSize: 12, color: C.dim }}>or type a follow-up</span>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+      <ChatInput
+        onSend={send}
+        loading={loading}
+        imgUpload={cfg.imgUpload && dissectPhase === "p1"}
+        placeholder={showBrandPrompt ? "Type yes, or ask a follow-up question..." : cfg.ph}
+      />
+    </div>
+  );
+}
 
-      {(brand.concepts||[]).length>0&&(
-        <>
-          <Divider/>
-          <div style={{fontSize:14,fontWeight:800,color:T.text,marginBottom:12}}>Saved Concepts</div>
-          {brand.concepts.map((c,i)=>{
-            const pc=PERSUASION_COLORS[c.persuasion]||{c:T.dim,bg:T.warm,b:T.border};
-            return(
-              <div key={i} style={{background:T.warm,border:`1.5px solid ${T.border}`,borderRadius:7,padding:"12px 16px",marginBottom:8,display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10}}>
-                <div>
-                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
-                    <div style={{fontSize:13,fontWeight:800,color:T.text}}>{c.name}</div>
-                    <Chip label={c.persuasion} color={pc.c} bg={pc.bg} border={pc.b}/>
-                    <Chip label={c.awareness} color={T.mid} bg={T.surface} border={T.border}/>
+
+// ─── HOOK LIBRARY SCREEN ─────────────────────────────────────────────────────
+function HookLibrary({ library, onDeleteEntry, onDeleteHook, onBack, onBriefHook }) {
+  const [search, setSearch] = useState("");
+  const [expandedEntry, setExpandedEntry] = useState(null);
+
+  // Phase filter removed — hooks aren't tagged with phases in practice
+
+  const filtered = library.filter(entry =>
+    !search || entry.sourceAd.toLowerCase().includes(search.toLowerCase()) ||
+    entry.hooks.some(h => h.text.toLowerCase().includes(search.toLowerCase()) || h.category.toLowerCase().includes(search.toLowerCase()))
+  );
+
+  const downloadAll = () => {
+    const lines = ["THE INTEL ROOM — HOOK LIBRARY", "Generated: " + new Date().toLocaleDateString(), "", ""];
+    library.forEach(entry => {
+      lines.push("═══════════════════════════════════");
+      lines.push("SOURCE: " + entry.sourceAd);
+      lines.push("BRAND: " + (entry.brand || "Not specified"));
+      lines.push("SAVED: " + new Date(entry.savedAt).toLocaleDateString());
+      lines.push("");
+      const byCategory = {};
+      entry.hooks.forEach(h => {
+        if (!byCategory[h.category]) byCategory[h.category] = [];
+        byCategory[h.category].push(h);
+      });
+      Object.entries(byCategory).forEach(([cat, hooks]) => {
+        lines.push(cat.toUpperCase());
+        hooks.forEach(h => {
+          lines.push("  • " + h.text + (h.phase ? " [" + h.phase + "]" : ""));
+        });
+        lines.push("");
+      });
+    });
+    const blob = new Blob([lines.join("\n")], { type: "text/plain" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = "hook-library.txt";
+    document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
+  };
+
+  const copyAll = () => {
+    const lines = [];
+    library.forEach(entry => {
+      lines.push("SOURCE: " + entry.sourceAd);
+      entry.hooks.forEach(h => lines.push("• " + h.text + (h.phase ? " [" + h.phase + "]" : "")));
+      lines.push("");
+    });
+    copyText(lines.join("\n"));
+  };
+
+  return (
+    <div style={{ height: "100%", display: "flex", flexDirection: "column", background: C.bg }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 16px", borderBottom: "1px solid " + C.border, background: C.surface, flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button onClick={onBack} style={{ background: "none", border: "none", cursor: "pointer", color: C.mid, display: "flex", alignItems: "center", gap: 4, fontSize: 13, padding: 0 }}>
+            <Icon name="back" size={14} /> Back
+          </button>
+          <div style={{ width: 1, height: 14, background: C.border }} />
+          <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <div style={{ width: 7, height: 7, borderRadius: "50%", background: C.orange }} />
+            <span style={{ fontSize: 14, fontWeight: 600, color: C.text }}>Hook Library</span>
+            <span style={{ fontSize: 12, color: C.dim, background: C.warm, border: "1px solid " + C.border, borderRadius: 5, padding: "1px 7px" }}>{library.reduce((n, e) => n + e.hooks.length, 0)} hooks</span>
+          </div>
+        </div>
+        {library.length > 0 && (
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={copyAll} style={{ display: "flex", alignItems: "center", gap: 4, background: C.warm, border: "1px solid " + C.border, borderRadius: 7, padding: "4px 10px", cursor: "pointer", fontSize: 12, color: C.mid }}>
+              <Icon name="copy" size={12} /> Copy all
+            </button>
+            <button onClick={downloadAll} style={{ display: "flex", alignItems: "center", gap: 4, background: C.orangeL, border: "1px solid " + C.orangeB, borderRadius: 7, padding: "4px 10px", cursor: "pointer", fontSize: 12, color: C.orange, fontWeight: 600 }}>
+              <Icon name="file" size={12} /> Download .txt
+            </button>
+          </div>
+        )}
+      </div>
+
+      {library.length === 0 ? (
+        <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 12, color: C.dim, padding: 32, textAlign: "center" }}>
+          <div style={{ width: 48, height: 48, borderRadius: 14, background: C.orangeL, border: "1px solid " + C.orangeB, display: "flex", alignItems: "center", justifyContent: "center" }}>
+            <Icon name="creative" size={20} />
+          </div>
+          <div style={{ fontSize: 15, fontWeight: 600, color: C.mid }}>No saved hooks yet</div>
+          <div style={{ fontSize: 13, color: C.dim, maxWidth: 300 }}>Run Dissect on any ad, get the brand hook categories, then hit "Save hooks" to build your library.</div>
+        </div>
+      ) : (
+        <div style={{ flex: 1, overflowY: "auto", padding: "14px 16px" }}>
+          {/* Search */}
+          <div style={{ marginBottom: 14 }}>
+            <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search hooks..." style={{ width: "100%", boxSizing: "border-box", border: "1px solid " + C.border, borderRadius: 8, padding: "7px 11px", fontSize: 13, color: C.text, background: C.surface, outline: "none", fontFamily: "inherit" }} />
+          </div>
+
+          {/* Entries */}
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {filtered.map(entry => {
+              const isExpanded = expandedEntry === entry.id;
+              const visibleHooks = entry.hooks.filter(h =>
+                !search || h.text.toLowerCase().includes(search.toLowerCase()) || h.category.toLowerCase().includes(search.toLowerCase())
+              );
+              if (visibleHooks.length === 0) return null;
+
+              // Group by category
+              const byCategory = {};
+              visibleHooks.forEach(h => {
+                if (!byCategory[h.category]) byCategory[h.category] = [];
+                byCategory[h.category].push(h);
+              });
+
+              return (
+                <div key={entry.id} style={{ background: C.surface, border: "1px solid " + C.border, borderRadius: 12, overflow: "hidden" }}>
+                  {/* Entry header */}
+                  <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "11px 14px", borderBottom: isExpanded ? "1px solid " + C.border : "none", cursor: "pointer" }} onClick={() => setExpandedEntry(isExpanded ? null : entry.id)}>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700, color: C.orange, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 2 }}>Source</div>
+                      <div style={{ fontSize: 13, color: C.text, fontWeight: 500, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{entry.sourceAd}</div>
+                      <div style={{ display: "flex", gap: 6, marginTop: 4, flexWrap: "wrap" }}>
+                        {entry.brand && <span style={{ fontSize: 11, background: C.goldL, color: C.gold, border: "1px solid #e0cf9a", borderRadius: 4, padding: "1px 6px" }}>{entry.brand}</span>}
+                        <span style={{ fontSize: 11, background: C.warm, color: C.dim, border: "1px solid " + C.border, borderRadius: 4, padding: "1px 6px" }}>{visibleHooks.length} hooks</span>
+                        <span style={{ fontSize: 11, color: C.dim }}>{new Date(entry.savedAt).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                    <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                      <button onClick={e => { e.stopPropagation(); onDeleteEntry(entry.id); }} style={{ background: "none", border: "1px solid " + C.redB, borderRadius: 6, padding: "3px 7px", cursor: "pointer", color: C.red, display: "flex", alignItems: "center" }}><Icon name="trash" size={11} /></button>
+                      <div style={{ color: C.dim, fontSize: 14, display: "flex", alignItems: "center" }}>{isExpanded ? "▲" : "▼"}</div>
+                    </div>
                   </div>
-                  <div style={{fontSize:12,color:T.mid,lineHeight:1.5}}>{c.aha}</div>
+
+                  {/* Hooks by category */}
+                  {isExpanded && (
+                    <div style={{ padding: "10px 14px 14px" }}>
+                      {Object.entries(byCategory).map(([cat, catHooks]) => (
+                        <div key={cat} style={{ marginBottom: 14 }}>
+                          <div style={{ fontSize: 10, fontWeight: 700, color: C.orange, textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 7 }}>{cat}</div>
+                          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                            {catHooks.map((hook, hi) => {
+                              const globalIdx = entry.hooks.indexOf(hook);
+                              return (
+                                <div key={hi} style={{ background: C.orangeL, border: "1px solid " + C.orangeB, borderRadius: 9, padding: "9px 12px", display: "flex", alignItems: "flex-start", gap: 8 }}>
+                                  <div style={{ flex: 1, minWidth: 0 }}>
+                                    <div style={{ fontSize: 13, color: C.text, lineHeight: 1.5, fontStyle: "italic" }}>"{hook.text}"</div>
+                                    {hook.phase && <div style={{ fontSize: 11, color: C.orange, marginTop: 4, fontWeight: 500 }}>{hook.phase}</div>}
+                                  </div>
+                                  <div style={{ display: "flex", gap: 5, flexShrink: 0 }}>
+                                    <button onClick={() => copyText(hook.text)} title="Copy hook" style={{ background: "none", border: "1px solid " + C.orangeB, borderRadius: 5, padding: "3px 7px", cursor: "pointer", color: C.orange, display: "flex", alignItems: "center" }}><Icon name="copy" size={11} /></button>
+                                    <button onClick={() => onBriefHook(hook, entry)} title="Brief this hook" style={{ background: C.orange, border: "none", borderRadius: 5, padding: "3px 8px", cursor: "pointer", color: "#fff", fontSize: 11, fontWeight: 600, whiteSpace: "nowrap" }}>Brief →</button>
+                                    <button onClick={() => onDeleteHook(entry.id, globalIdx)} title="Delete hook" style={{ background: "none", border: "1px solid " + C.redB, borderRadius: 5, padding: "3px 7px", cursor: "pointer", color: C.red, display: "flex", alignItems: "center" }}><Icon name="trash" size={11} /></button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                          {/* Copy category */}
+                          <button onClick={() => copyText(catHooks.map(h => "• " + h.text).join("\n"))} style={{ marginTop: 5, background: "none", border: "none", cursor: "pointer", fontSize: 11, color: C.dim, padding: "2px 0", display: "flex", alignItems: "center", gap: 4 }}>
+                            <Icon name="copy" size={11} /> Copy {cat}
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <button onClick={()=>removeConcept(i)} style={{fontSize:11,color:T.red,background:"none",border:"none",cursor:"pointer",flexShrink:0}}>x</button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── HOME ─────────────────────────────────────────────────────────────────────
+const MODES = [
+  { id: "launch",  label: "Launch",  color: C.blue,   bg: C.blueL,   bdr: C.blueB,   icon: "launch",  tagline: "Build the architecture before you spend", desc: "AI guides you through account status, economics, budget split, hypotheses, and success thresholds — before a single dollar goes out.", chips: ["New vs existing account", "AOV to CPA", "Campaign tree", "Hypotheses"] },
+  { id: "diagnose",label: "Diagnose",color: C.purple, bg: C.purpleL, bdr: C.purpleB, icon: "diagnose", tagline: "Read the data. Find where it broke.", desc: "Paste metrics in any format. Layer-by-layer funnel analysis, a verdict per concept, and a structured block to send back to The Creative Room.", chips: ["Any data format", "Thumbstop to Hold to CTR", "Scale / Iterate / Kill", "Creative Room block"] },
+  { id: "report",  label: "Report",  color: C.green,  bg: C.greenL,  bdr: C.greenB,  icon: "report",  tagline: "Turn diagnosis into a decision log.", desc: "Internal performance report. What happened, what the patterns mean, what to do next.", chips: ["Builds from Diagnose", "Performance snapshot", "Pattern tracking", "Next steps"] },
+  { id: "dissect", label: "Dissect", color: C.orange, bg: C.orangeL, bdr: C.orangeB, icon: "dissect", tagline: "Reverse-engineer any ad that's working.", desc: "Upload a screenshot or describe what you saw. Full breakdown plus Phase 1 vs Phase 2 strategic fit assessment — then your brand's version with a ready-to-send Creative Room brief.", chips: ["Image upload", "Strategic phase assessment", "Part 2 always fires", "Brief for Creative Room"] },
+];
+
+function Home({ onMode, context, onContext, brands, onSaveBrand, onDeleteBrand, sessions, hookCount, onViewLibrary }) {
+  const [showCtx, setShowCtx] = useState(false);
+  return (
+    <div style={{ height: "100%", overflowY: "auto", background: C.bg }}>
+      <div style={{ maxWidth: 680, margin: "0 auto", padding: "28px 18px 40px" }}>
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, marginBottom: 14 }}>
+            <div>
+              <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 5 }}>
+                <div style={{ width: 8, height: 8, borderRadius: "50%", background: C.gold }} />
+                <span style={{ fontSize: 11, fontWeight: 700, color: C.gold, letterSpacing: "0.1em", textTransform: "uppercase" }}>The Intel Room</span>
               </div>
+              <h1 style={{ fontSize: 22, fontWeight: 700, color: C.text, margin: 0 }}>What does the data say?</h1>
+            </div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              {context && <div style={{ fontSize: 11, color: C.green, background: C.greenL, border: "1px solid " + C.greenB, borderRadius: 6, padding: "3px 8px", fontWeight: 500 }}>Context active</div>}
+              <button onClick={onViewLibrary} style={{ display: "flex", alignItems: "center", gap: 5, background: hookCount > 0 ? C.orangeL : C.warm, border: "1px solid " + (hookCount > 0 ? C.orangeB : C.border), borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 12, color: hookCount > 0 ? C.orange : C.dim, whiteSpace: "nowrap" }}>
+                <Icon name="creative" size={12} /> Hook Library{hookCount > 0 ? " (" + hookCount + ")" : ""}
+              </button>
+              <button onClick={() => setShowCtx(s => !s)} style={{ display: "flex", alignItems: "center", gap: 5, background: context ? C.greenL : C.warm, border: "1px solid " + (context ? C.greenB : C.border), borderRadius: 8, padding: "6px 12px", cursor: "pointer", fontSize: 12, color: context ? C.green : C.mid, whiteSpace: "nowrap" }}>
+                {context ? <><Icon name="check" size={12} /> Manage context</> : <><Icon name="context" size={12} /> Add brand context</>}
+              </button>
+            </div>
+          </div>
+          <div style={{ padding: "13px 16px", background: C.surface, border: "1px solid " + C.border, borderRadius: 11 }}>
+            <p style={{ fontSize: 13, color: C.mid, margin: 0, lineHeight: 1.7 }}>
+              The Intel Room is where performance becomes decisions. <strong style={{ color: C.text }}>Plan test architecture</strong> before you spend. <strong style={{ color: C.text }}>Diagnose what the data means</strong> after you do. <strong style={{ color: C.text }}>Report what happened</strong> for yourself or your team. <strong style={{ color: C.text }}>Dissect any ad</strong> catching your eye to extract what is transferable to your brand.
+            </p>
+          </div>
+        </div>
+
+        {showCtx && <ContextPanel context={context} onContext={onContext} brands={brands} onSaveBrand={onSaveBrand} onDeleteBrand={onDeleteBrand} onClose={() => setShowCtx(false)} />}
+
+        {Object.values(sessions).some(s => s.length > 1) && (
+          <div style={{ marginBottom: 14, padding: "9px 13px", background: C.blueL, border: "1px solid " + C.blueB, borderRadius: 9, display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: C.blue }}>
+            <div style={{ width: 6, height: 6, borderRadius: "50%", background: C.blue, flexShrink: 0 }} />
+            Active: {Object.entries(sessions).filter(([, s]) => s.length > 1).map(([k]) => MODE_CFG[k].label).join(", ")} — conversations saved
+          </div>
+        )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          {MODES.map(m => {
+            const hasSession = sessions[m.id]?.length > 1;
+            return (
+              <button key={m.id} onClick={() => onMode(m.id)}
+                style={{ background: C.surface, border: "1px solid " + (hasSession ? m.color + "60" : C.border), borderRadius: 13, padding: "16px 18px", cursor: "pointer", textAlign: "left", position: "relative", overflow: "hidden" }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = m.color; e.currentTarget.style.boxShadow = "0 2px 16px " + m.color + "20"; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = hasSession ? m.color + "60" : C.border; e.currentTarget.style.boxShadow = "none"; }}>
+                <div style={{ position: "absolute", top: 0, left: 0, width: 3, height: "100%", background: m.color, borderRadius: "13px 0 0 13px" }} />
+                <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 10 }}>
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 7, marginBottom: 5 }}>
+                      <div style={{ width: 26, height: 26, borderRadius: 7, background: m.bg, display: "flex", alignItems: "center", justifyContent: "center", color: m.color }}><Icon name={m.icon} size={13} /></div>
+                      <span style={{ fontSize: 15, fontWeight: 700, color: C.text }}>{m.label}</span>
+                      <span style={{ fontSize: 12, color: m.color, fontWeight: 500 }}>&#8212; {m.tagline}</span>
+                      {hasSession && <span style={{ fontSize: 10, background: m.bg, color: m.color, border: "1px solid " + m.bdr, borderRadius: 4, padding: "1px 6px", fontWeight: 600 }}>IN PROGRESS</span>}
+                    </div>
+                    <p style={{ fontSize: 13, color: C.mid, margin: "0 0 9px", lineHeight: 1.55 }}>{m.desc}</p>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                      {m.chips.map((ch, ci) => <span key={ci} style={{ fontSize: 11, background: m.bg, color: m.color, border: "1px solid " + m.bdr, borderRadius: 5, padding: "2px 7px", fontWeight: 500 }}>{ch}</span>)}
+                    </div>
+                  </div>
+                  <span style={{ color: C.dim, fontSize: 16 }}>&#8594;</span>
+                </div>
+              </button>
             );
           })}
-        </>
-      )}
+        </div>
+
+
+      </div>
     </div>
   );
 }
 
-function EField({label,val,onChange,color,multi,rows=2}){
-  return(
-    <div style={{marginBottom:10}}>
-      <div style={{fontSize:9,fontWeight:800,letterSpacing:1.5,color:color||T.dim,textTransform:"uppercase",marginBottom:4}}>{label}</div>
-      {multi
-        ?<textarea value={val||""} onChange={e=>onChange(e.target.value)} rows={rows}
-            style={{width:"100%",background:T.surface,border:`1px solid ${T.border}`,borderRadius:5,padding:"7px 10px",fontSize:12,color:T.text,fontFamily:"Georgia,serif",resize:"vertical",outline:"none",boxSizing:"border-box",lineHeight:1.6}}/>
-        :<input value={val||""} onChange={e=>onChange(e.target.value)}
-            style={{width:"100%",background:T.surface,border:`1px solid ${T.border}`,borderRadius:5,padding:"7px 10px",fontSize:12,color:T.text,fontFamily:"Georgia,serif",outline:"none",boxSizing:"border-box"}}/>
-      }
+// ─── ONBOARDING ───────────────────────────────────────────────────────────────
+function Onboarding({ onComplete }) {
+  const [name, setName] = useState("");
+  const [focused, setFocused] = useState(false);
+  const submit = () => { if (name.trim()) onComplete(name.trim()); };
+  return (
+    <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", background: C.bg, padding: 24 }}>
+      <div style={{ maxWidth: 480, width: "100%", textAlign: "center" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 8, marginBottom: 32 }}>
+          <div style={{ display: "flex", gap: 5 }}>{[C.blue, C.purple, C.green, C.orange].map((col, i) => <div key={i} style={{ width: 8, height: 8, borderRadius: "50%", background: col, opacity: 0.8 }} />)}</div>
+          <span style={{ fontSize: 13, fontWeight: 700, color: C.gold, letterSpacing: "0.1em", textTransform: "uppercase" }}>The Intel Room</span>
+        </div>
+        <h1 style={{ fontSize: 28, fontWeight: 700, color: C.text, margin: "0 0 12px", lineHeight: 1.2, letterSpacing: "-0.02em" }}>Where performance<br />becomes decisions.</h1>
+        <p style={{ fontSize: 14, color: C.mid, margin: "0 0 28px", lineHeight: 1.7, maxWidth: 380, marginLeft: "auto", marginRight: "auto" }}>Plan test architecture before you spend. Diagnose what the data means. Report what happened. Dissect any ad catching your eye.</p>
+        <div style={{ background: C.surface, border: "1px solid " + (focused ? C.text : C.border), borderRadius: 12, padding: "14px 16px", marginBottom: 12, transition: "border-color 0.2s", textAlign: "left" }}>
+          <label style={{ fontSize: 11, fontWeight: 700, color: C.mid, letterSpacing: "0.06em", textTransform: "uppercase", display: "block", marginBottom: 6 }}>What is your name?</label>
+          <input value={name} onChange={e => setName(e.target.value)} onFocus={() => setFocused(true)} onBlur={() => setFocused(false)} onKeyDown={e => e.key === "Enter" && submit()} placeholder="Your name or your team's name..." style={{ width: "100%", border: "none", outline: "none", fontSize: 15, color: C.text, background: "transparent", fontFamily: "inherit" }} />
+        </div>
+        <button onClick={submit} disabled={!name.trim()} style={{ width: "100%", background: name.trim() ? C.text : C.border, color: name.trim() ? "#fff" : C.dim, border: "none", borderRadius: 10, padding: "13px 0", fontSize: 15, fontWeight: 600, cursor: name.trim() ? "pointer" : "not-allowed", fontFamily: "inherit" }}>
+          Enter the Intel Room &#8594;
+        </button>
+        <p style={{ fontSize: 11, color: C.dim, marginTop: 12 }}>No login required. Works standalone or alongside The Strategy Room and The Creative Room.</p>
+      </div>
     </div>
-  
   );
 }
 
-function EList({label,items,onChange,color}){
-  return(
-    <div style={{marginBottom:10}}>
-      <div style={{fontSize:9,fontWeight:800,letterSpacing:1.5,color:color||T.dim,textTransform:"uppercase",marginBottom:4}}>{label}</div>
-      {(items||[]).map((item,i)=>(
-        <input key={i} value={item} onChange={e=>onChange(i,e.target.value)}
-          style={{width:"100%",background:T.surface,border:`1px solid ${T.border}`,borderRadius:5,padding:"6px 10px",fontSize:12,color:T.text,fontFamily:"Georgia,serif",outline:"none",boxSizing:"border-box",marginBottom:3}}/>
-      ))}
-    </div>
-  
-  );
+// ─── ROOT ─────────────────────────────────────────────────────────────────────
+function makeStarter(mode, context) {
+  const cfg = MODE_CFG[mode];
+  return [{ role: "assistant", content: (context ? "**Brand context loaded.**\n\n" : "") + cfg.starter }];
 }
 
-// ── HOOK BUILDER TAB ──────────────────────────────────────────────────────────
-function HookTab({brand,savedHooks,setSavedHooks,activeConcept,clearActiveConcept}){
-  const STEPS_KEYS=["principle","persona","format","subtype","awareness","angle","trigger","formula"];
+export default function TheIntelRoom() {
+  const [screen, setScreen] = useState("onboarding");
+  const [mode, setMode] = useState(null);
+  const [context, setContext] = useState("");
+  const { brands, save: saveBrand, remove: deleteBrand } = useBrands();
+  const { library, saveHooks, deleteEntry, deleteHook } = useHookLibrary();
+  const [sessions, setSessions] = useState({
+    launch: makeStarter("launch", ""),
+    diagnose: makeStarter("diagnose", ""),
+    report: makeStarter("report", ""),
+    dissect: makeStarter("dissect", ""),
+  });
+  // For "Brief this hook" — sets a prefilled message and opens Dissect
+  const [briefHook, setBriefHook] = useState(null);
 
-  const conceptToSel=c=>c?{
-    principle:brand.primary_principle||"Desire-First",
-    persona:c.persona||brand.core_persona?.name||"",
-    awareness:c.awareness||"",
-    angle:c.angle||"",
-    trigger:c.trigger||"",
-  }:{};
+  const setModeSession = (m, msgs) => setSessions(prev => ({ ...prev, [m]: msgs }));
 
-  const [step,setStep]=useState(activeConcept?2:0);
-  const [sel,setSel]=useState(activeConcept?conceptToSel(activeConcept):{});
-  const [stage,setStage]=useState("deciding");
-  const [hooks,setHooks]=useState([]);
-  const [allPrevHooks,setAllPrevHooks]=useState([]);
-  const [chosen,setChosen]=useState(null);
-  const [editedHook,setEditedHook]=useState("");
-  const [brief,setBrief]=useState(null);
-  const [loading,setLoading]=useState(false);
-  const [copied,setCopied]=useState(false);
-
-  const nextStep=(fromIdx,newSel)=>{
-    let next=fromIdx+1;
-    while(next<8&&newSel[STEPS_KEYS[next]]&&STEPS_KEYS[next]!=="formula")next++;
-    return next;
-  };
-  const pick=(key,val)=>{
-    const ns={...sel,[key]:val};
-    setSel(ns);
-    setStep(nextStep(STEPS_KEYS.indexOf(key),ns));
-  };
-  const reset=()=>{
-    setSel({});setHooks([]);setAllPrevHooks([]);setChosen(null);
-    setEditedHook("");setBrief(null);setStage("deciding");
-    setStep(0);setCopied(false);
-    if(clearActiveConcept)clearActiveConcept();
+  const goToMode = (m) => {
+    const session = sessions[m];
+    if (session.length === 1) setModeSession(m, makeStarter(m, context));
+    setMode(m); setScreen("mode");
   };
 
-  const personas=[
-    brand.core_persona?.name&&{label:brand.core_persona.name,sub:"Core - Phase 1"},
-    brand.secondary_persona?.name&&{label:brand.secondary_persona.name,sub:"Secondary - Phase 2"},
-  ].filter(Boolean);
-  const angles=sel.awareness?(AW_ANGLES[sel.awareness]||ANGLES):ANGLES;
-
-  const STEPS=[
-    {key:"principle",title:"Primary Organising Principle",sub:"How does this product get discovered?",opts:PRINCIPLES.map(p=>({label:p,sub:p==="Pain-First"?"Lead with the problem":"Lead with the vision"})),color:T.gold,bg:T.goldL,border:T.goldB},
-    {key:"persona",title:"Persona",sub:"Who are we talking to?",opts:personas.length?personas:[{label:"Add personas in Strategy Doc tab",sub:""}],color:T.green,bg:T.greenL,border:T.green},
-    {key:"format",title:"Format Category",sub:"Video or Image?",opts:[{label:"VIDEO",sub:"Moving image"},{label:"IMAGE",sub:"Static"}],color:T.blue,bg:T.blueL,border:T.blue},
-    {key:"subtype",title:"Format Subtype",sub:"What specific style?",opts:(FORMATS[sel.format]||[]).map(s=>({label:s,def:FORMAT_DEFS[s]||""})),color:T.blue,bg:T.blueL,border:T.blue},
-    {key:"awareness",title:"Awareness Stage",sub:"Where is this person in their journey?",opts:AWARENESS.map(a=>({label:a,sub:AWARENESS_DEFS[a]})),color:T.green,bg:T.greenL,border:T.green},
-    {key:"angle",title:"Messaging Angle",sub:"What perspective does this ad take?",opts:angles.map(a=>({label:a})),color:T.orange,bg:T.orangeL,border:T.orange},
-    {key:"trigger",title:"Psychology Trigger",sub:"What emotion activates this ad?",opts:TRIGGERS.map(t=>({label:t})),color:T.red,bg:T.redL,border:T.red},
-    {key:"formula",title:"Hook Formula",sub:"What structure delivers the opening? Hover for definition.",opts:FORMULAS.map(f=>({label:f,def:FORMULA_DEFS[f]})),color:T.purple,bg:T.purpleL,border:T.purple},
-  ];
-
-  const cur=STEPS[step];
-  const done=step>=STEPS.length;
-  const persona=sel.persona===brand.core_persona?.name?brand.core_persona:brand.secondary_persona;
-
-  const lang=persona?.language||{};
-  const langFlat=Array.isArray(lang);
-  const trigPhrases=langFlat?lang:(lang.trigger||[]);
-  const painPhrases=langFlat?lang:(lang.pain||[]);
-  const desirePhrases=langFlat?lang:(lang.desire||[]);
-  const objPhrases=langFlat?lang:(lang.objection||[]);
-
-  const ANGLE_DEFS={
-    "Consequences":"What gets worse in their life if they never solve this? Lead with the cost of inaction.",
-    "Failed Solutions":"They have already tried things that disappointed them. Open by naming what did not work.",
-    "Desired Outcome":"Paint the specific after-state they fantasise about. Make them feel the transformation.",
-    "Objections":"Name the exact doubt stopping them from buying and dismantle it directly.",
-    "Features/Benefits":"Frame as outcomes this persona cares about, not technical features.",
-    "Use Case":"Show the specific daily moment where they experience this problem. Make it recognisable.",
-    "Misconceptions":"Correct the false belief they hold about the problem or category.",
-    "Education":"Lead with the surprising fact they do not know that would change how they see this.",
-    "Acceptance":"Challenge what they have normalised or given up on that they should not have.",
-    "Identity":"Show who they want to become. How does using this product reflect on who they are.",
-  };
-  const AWARENESS_RULES={
-    "Unaware":"Lead with a situation or feeling they already recognise from daily life. Do NOT mention the product, the category, or any solution.",
-    "Problem Aware":"Lead with the feeling or frustration. Make them feel understood before anything else. Introduce the product only after emotional connection is made.",
-    "Solution Aware":"They have tried things and been disappointed. Lead with differentiation. Why this is different from everything they already tried.",
-    "Product Aware":"They know the brand but have not bought. Handle their specific objection directly.",
-    "Most Aware":"Lead with the offer or final reason to act now. No need to explain the problem.",
-  };
-  const FORMULA_STRUCTURES={
-    "Tribal Identity":"IF YOU [specific behaviour this persona already does] THIS IS FOR YOU. Instant recognition before the product appears.",
-    "Investment Hook":"I SPENT [specific amount] ON [thing] SO YOU DO NOT HAVE TO. Creator did the work on behalf of viewer.",
-    "Why Did No One Tell Me":"WHY DID NO ONE TELL ME [surprising fact or solution]? Genuine surprise. Secret being revealed.",
-    "Problem-First":"I TRIED [everything] TO SOLVE [problem]. NOTHING WORKED UNTIL [product]. Problem felt before solution appears.",
-    "POV Hook":"POV: [specific relatable moment the persona already lives]. They see themselves before they see the product.",
-    "Emotional Trigger":"Open directly with pure feeling. No preamble. First line makes them feel something before they understand what is being sold.",
-    "Give Me Time":"GIVE ME [short time] AND I WILL SHOW YOU [specific transformation]. Small ask lowers barrier.",
-    "Founder Intro":"I STARTED [brand] BECAUSE [specific personal frustration]. Personal and specific. Vulnerability builds trust.",
-    "Golden Nugget":"Lead with the single most surprising specific fact or real customer quote verbatim. The fact stops the scroll.",
-    "Negative Hook":"STOP [doing X] or I TRIED [X] AND [what went wrong]. Counterintuitive framing creates curiosity.",
-    "Curiosity Loop":"Open a question or tension that cannot be resolved without watching more. Never resolve in the hook.",
-    "I-Led Story":"I [specific personal thing that happened]. First person. Viewer lives the story before product appears.",
-    "Before / After":"Show the painful before-state first. The gap between before and after is the hook.",
-    "Creator Partnership":"I TRIED EVERY [product type] ON THE MARKET. THIS IS THE ONLY ONE I KEPT BUYING. Trust by exhaustive research.",
-  };
-  const principleRule=sel.principle==="Pain-First"
-    ?"PAIN-FIRST: Lead with the problem, frustration, or failure. Do not open with anything positive or aspirational. Product appears only after pain has been felt."
-    :"DESIRE-FIRST: Lead with the identity, vision, or aspiration this persona wants. Product is the vehicle. Do not open with a problem.";
-  const langSection=langFlat
-    ?("LANGUAGE BANK - use at least one exact phrase verbatim, build the hook around it:\n"+(lang.length>0?lang.map(x=>"- "+x).join("\n"):"none provided"))
-    :("LANGUAGE BANK - MANDATORY. Use at least one exact phrase verbatim. Do not paraphrase.\n\nTRIGGER PHRASES (use to open the hook):\n"+(trigPhrases.length>0?trigPhrases.map(x=>"- "+x).join("\n"):"none")+"\n\nPAIN PHRASES (use when Pain-First or Problem Aware):\n"+(painPhrases.length>0?painPhrases.map(x=>"- "+x).join("\n"):"none")+"\n\nDESIRE PHRASES (use when Desire-First or Solution Aware):\n"+(desirePhrases.length>0?desirePhrases.map(x=>"- "+x).join("\n"):"none")+"\n\nOBJECTION PHRASES (use in brief body not hook):\n"+(objPhrases.length>0?objPhrases.map(x=>"- "+x).join("\n"):"none"));
-  const baseCtx="BRAND: "+brand.name+"\nOrganising Idea: "+brand.organising_idea+"\nStrategic Tension: "+(brand.strategic_tension||"")+"\nWhite Space: "+(brand.white_space||"")+"\nBrand Voice: "+(brand.brand_voice||[]).join(" | ")+"\n\nPERSONA: "+sel.persona+"\nDescription: "+(persona?.desc||"")+"\nDesire: "+(persona?.desire||"")+"\nPain: "+(persona?.pain||"")+"\n\nFORMAT: "+sel.format+" - "+sel.subtype+" ("+( FORMAT_DEFS[sel.subtype]||"")+")\n\nPRINCIPLE: "+principleRule+"\n\nAWARENESS: "+sel.awareness+"\nRule: "+(AWARENESS_RULES[sel.awareness]||"")+"\n\nANGLE: "+sel.angle+"\nMeaning: "+(ANGLE_DEFS[sel.angle]||sel.angle)+"\n\nTRIGGER: "+sel.trigger+"\n\nFORMULA: "+sel.formula+"\nStructure: "+(FORMULA_STRUCTURES[sel.formula]||FORMULA_DEFS[sel.formula]||"")+"\n\n"+langSection+"\n\nPROOF POINTS:\n"+(brand.proof_points||[]).join("\n");
-
-
-  const generateHooks=async()=>{
-    const prev=[...allPrevHooks,...hooks.map(h=>h.hook_text)].filter(Boolean);
-    setLoading(true);setHooks([]);setChosen(null);setEditedHook("");setStage("hooks");
-    const avoidBlock=prev.length>0
-      ?`\n\nPREVIOUS HOOKS - do NOT repeat or closely resemble any of these, go in completely different directions:\n${prev.map((h,i)=>`${i+1}. "${h}"`).join("\n")}`
-      :"";
-    const prompt="You are a senior direct response creative strategist. Generate hooks that feel like real customers talking to a friend — not a brand writing ads.\n\n"+baseCtx+avoidBlock+"\n\nTASK: Generate exactly 4 hooks. Each MUST:\n1. Follow the "+sel.formula+" formula structure exactly as defined\n2. Use at least one phrase from the language bank VERBATIM - word for word, not paraphrased\n3. Respect the "+sel.awareness+" rule - especially what must NOT appear\n4. Activate the "+sel.trigger+" emotion as the entry point\n5. Sound like a real person talking to a friend, never a brand\n6. Feel distinctly different from each other\n7. Not repeat any previous hooks listed above\n\nFor hook_visual: specific shot, person, environment - not vague but specific.\nFor hook_audio: exact tone of voice, pacing, ambient sound. N/A for static image.\n\nReturn ONLY a raw JSON array no markdown:\n[{\"hook_text\":\"exact opening line\",\"hook_visual\":\"specific visual\",\"hook_audio\":\"specific audio or N/A\"},{\"hook_text\":\"...\",\"hook_visual\":\"...\",\"hook_audio\":\"...\"},{\"hook_text\":\"...\",\"hook_visual\":\"...\",\"hook_audio\":\"...\"},{\"hook_text\":\"...\",\"hook_visual\":\"...\",\"hook_audio\":\"...\"}]";
-;
-    try{
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":import.meta.env.VITE_ANTHROPIC_API_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:1500,messages:[{role:"user",content:prompt}]})});
-      const d=await res.json();
-      const raw=(d.content?.[0]?.text||"").replace(/```json|```/g,"").trim();
-      const parsed=JSON.parse(raw);
-      setHooks(parsed);
-      setAllPrevHooks(p=>[...p,...parsed.map(h=>h.hook_text)]);
-    }catch{setHooks([{hook_text:"Could not generate hooks. Please try again.",hook_visual:"",hook_audio:""}]);}
-    setLoading(false);
-  };
-
-  const generateBrief=async()=>{
-    const hookToUse=editedHook||hooks[chosen]?.hook_text||"";
-    setLoading(true);setBrief(null);setStage("brief");
-    const prompt="You are a senior direct response creative strategist writing a creator brief. Be specific - vague briefs produce expensive mediocre creative.\n\n"+baseCtx+"\n\nCHOSEN HOOK: \""+hookToUse+"\"\n\nWrite a complete creator brief. Rules per field:\n- aha: single sentence where viewer shifts from curious to convinced\n- gut (0-3s): emotional stop-scroll moment, no product yet, pure feeling\n- brain_a (3-8s): introduce product with one specific believable proof point\n- brain_b (8-15s): handle "+sel.persona+" top 3 objections using their exact language\n- pocket: one CTA matching the "+sel.awareness+" stage, not a hard sell if awareness is low\n- overview: 2-3 sentences, who this is for and what feeling it must create\n- dos: specific - not 'be authentic' but 'film in natural daylight no ring light visible'\n- donts: specific things that will kill this ad for this persona and format\n- broll: exact shots, not 'lifestyle footage' but 'close up of hands placing product label visible'\n- casting: exact age range, energy, what they look like, what they must NOT look like\n- variations: 3 ways to change one specific thing and retest from same filming session\n- filming: orientation, lighting, location, audio\n\nReturn ONLY raw JSON no markdown:\n{\"aha\":\"\",\"gut\":\"\",\"brain_a\":\"\",\"brain_b\":\"\",\"pocket\":\"\",\"overview\":\"\",\"dos\":[\"\",\"\",\"\"],\"donts\":[\"\",\"\",\"\"],\"broll\":[\"\",\"\",\"\",\"\"],\"casting\":\"\",\"variations\":[\"\",\"\",\"\"],\"filming\":\"\"}";
-;
-    try{
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json","x-api-key":import.meta.env.VITE_ANTHROPIC_API_KEY,"anthropic-version":"2023-06-01","anthropic-dangerous-direct-browser-access":"true"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:2000,messages:[{role:"user",content:prompt}]})});
-      const d=await res.json();
-      const raw=(d.content?.[0]?.text||"").replace(/```json|```/g,"").trim();
-      setBrief({
-        ...JSON.parse(raw),
-        hook_text:hookToUse,
-        hook_visual:hooks[chosen]?.hook_visual||"",
-        hook_audio:hooks[chosen]?.hook_audio||"",
-      });
-    }catch{setBrief({error:true});}
-    setLoading(false);
-  };
-
-  const saveBrief=()=>{
-    if(!brief)return;
-    const h={...brief,selections:sel,brand:brand.name,date:new Date().toLocaleDateString()};
-    setSavedHooks(p=>[...p,h]);
-  };
-
-  const downloadBrief=(h)=>{
-    const lines=[
-      `HOOK: ${h.hook_text}`,
-      `VISUAL: ${h.hook_visual||""}`,
-      `AUDIO: ${h.hook_audio||""}`,
-      ``,`AHA MOMENT: ${h.aha||""}`,
-      ``,`GBP BODY:`,
-      `GUT: ${h.gut||""}`,
-      `BRAIN A: ${h.brain_a||""}`,
-      `BRAIN B: ${h.brain_b||""}`,
-      `POCKET: ${h.pocket||""}`,
-      ``,`CREATOR BRIEF:`,`${h.overview||""}`,
-      ``,`DOS:`,...(h.dos||[]),
-      ``,`DONTS:`,...(h.donts||[]),
-      ``,`B-ROLL:`,...(h.broll||[]),
-      ``,`CASTING: ${h.casting||""}`,
-      ``,`VARIATIONS:`,...(h.variations||[]),
-      ``,`FILMING: ${h.filming||""}`,
-      ``,`Format: ${h.selections?.format||""} ${h.selections?.subtype||""} | Awareness: ${h.selections?.awareness||""} | Angle: ${h.selections?.angle||""} | ${h.date||""}`,
+  const handleBriefHook = (hook, entry) => {
+    // Pre-populate dissect with a brief request for this specific hook
+    const briefRequest = "Give me the Creative Room brief for this hook:\n\n\"" + hook.text + "\"\n\nSource: " + entry.sourceAd + (hook.phase ? "\nPhase: " + hook.phase : "");
+    const starter = [
+      { role: "assistant", content: "Brand context loaded.\n\n" + MODE_CFG.dissect.starter },
+      { role: "user", content: briefRequest },
     ];
-    const text2=lines.join("\n");
-    const encoded="data:text/plain;charset=utf-8,"+encodeURIComponent(text2);
-    const a=document.createElement("a");
-    a.href=encoded;
-    a.download="brief-"+(h.hook_text||"hook").slice(0,30).replace(/[^a-zA-Z0-9]/g,"-")+".txt";
-    a.click();
+    setModeSession("dissect", starter);
+    setBriefHook(hook);
+    setMode("dissect");
+    setScreen("mode");
   };
 
-  const copyBrief=()=>{
-    if(!brief)return;
-    const h=brief;
-    const text=[
-      `HOOK: ${h.hook_text}`,`VISUAL: ${h.hook_visual||""}`,`AUDIO: ${h.hook_audio||""}`,
-      ``,`AHA: ${h.aha||""}`,
-      ``,`GUT: ${h.gut||""}`,`BRAIN A: ${h.brain_a||""}`,`BRAIN B: ${h.brain_b||""}`,`POCKET: ${h.pocket||""}`,
-      ``,`BRIEF: ${h.overview||""}`,
-      ``,`DOS:`,...(h.dos||[]),``,`DONTS:`,...(h.donts||[]),
-      ``,`B-ROLL:`,...(h.broll||[]),``,`CASTING: ${h.casting||""}`,
-      ``,`VARIATIONS:`,...(h.variations||[]),``,`FILMING: ${h.filming||""}`,
-    ].join("\n");
-    navigator.clipboard.writeText(text).then(()=>{setCopied(true);setTimeout(()=>setCopied(false),2000);});
-  };
-
-  const alreadySaved=brief&&savedHooks.some(h=>h.hook_text===brief.hook_text);
-
-
-  return(
-    <div style={{maxWidth:700,margin:"0 auto"}}>
-      <div style={{marginBottom:20}}>
-        <div style={{fontSize:18,fontWeight:800,color:T.text,marginBottom:4}}>Hook Builder</div>
-        <div style={{fontSize:13,color:T.mid}}>Make your decisions, get 4 hook options, pick one, generate the full brief. All fields editable before saving.</div>
-      </div>
-
-      {Object.keys(sel).length>0&&(
-        <div style={{background:T.surface,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"10px 14px",marginBottom:16}}>
-          <Lbl>Your Path</Lbl>
-          <div style={{display:"flex",flexWrap:"wrap",gap:6,alignItems:"center"}}>
-            {STEPS.filter(s=>sel[s.key]).map((s,i)=>(
-              <span key={s.key} style={{display:"flex",alignItems:"center",gap:4}}>
-                <Chip label={sel[s.key]} color={s.color} bg={s.bg} border={s.border}/>
-                {i<Object.keys(sel).length-1&&<span style={{color:T.border,fontSize:12}}>-></span>}
-              </span>
-            ))}
-          </div>
-          <button onClick={reset} style={{marginTop:8,fontSize:11,color:T.dim,background:"none",border:"none",cursor:"pointer",padding:0,textDecoration:"underline"}}>Start over</button>
-        </div>
-      )}
-
-      {stage==="deciding"&&!done&&cur&&(
-        <div style={{background:T.surface,border:`2px solid ${cur.border}30`,borderTop:`4px solid ${cur.color}`,borderRadius:10,padding:"18px 22px",marginBottom:16}}>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
-            <div style={{width:20,height:20,borderRadius:"50%",background:cur.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:800,color:"#fff",flexShrink:0}}>{step+1}</div>
-            <div style={{fontSize:15,fontWeight:800,color:T.text}}>{cur.title}</div>
-          </div>
-          <div style={{fontSize:12,color:T.mid,marginBottom:14,paddingLeft:28}}>{cur.sub}</div>
-          <ChoiceGrid options={cur.opts} selected={null} onSelect={v=>pick(cur.key,v)} color={cur.color} colorL={cur.bg} colorB={cur.border}/>
-        </div>
-      )}
-
-      {stage==="deciding"&&done&&(
-        <div style={{background:T.goldL,border:`2px solid ${T.goldB}`,borderRadius:10,padding:"20px 24px",textAlign:"center"}}>
-          <div style={{fontSize:15,fontWeight:800,color:T.text,marginBottom:6}}>All decisions made.</div>
-          <div style={{fontSize:13,color:T.mid,marginBottom:16,lineHeight:1.6}}>AI will generate 4 different hook options. Pick the one you like, edit if needed, then generate the full brief.</div>
-          <Btn onClick={generateHooks} disabled={loading}>{loading?"Generating...":"Generate Hooks"}</Btn>
-        </div>
-      )}
-
-      {stage==="hooks"&&(
-        <div>
-          {loading&&<div style={{background:T.goldL,border:`1.5px solid ${T.goldB}`,borderRadius:8,padding:"16px",textAlign:"center",fontSize:13,color:T.gold,marginBottom:16}}>Generating hooks...</div>}
-          {!loading&&hooks.length>0&&(
-            <div>
-              <div style={{fontSize:14,fontWeight:800,color:T.text,marginBottom:4}}>Pick your hook</div>
-              <div style={{fontSize:12,color:T.mid,marginBottom:14}}>Click the one that feels closest. Edit if needed, then generate the full brief.</div>
-              {hooks.map((h,i)=>{
-                const isChosen=chosen===i;
-                return(
-                  <div key={i} onClick={()=>{setChosen(i);setEditedHook(h.hook_text);}}
-                    style={{background:isChosen?T.goldL:T.surface,border:`2px solid ${isChosen?T.goldB:T.border}`,borderRadius:9,padding:"14px 18px",marginBottom:10,cursor:"pointer"}}>
-                    <div style={{display:"flex",alignItems:"flex-start",gap:10}}>
-                      <div style={{width:22,height:22,borderRadius:"50%",background:isChosen?T.goldB:T.border,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:800,color:"#fff",flexShrink:0,marginTop:1}}>{i+1}</div>
-                      <div style={{flex:1}}>
-                        <div style={{fontSize:14,fontWeight:700,color:T.text,lineHeight:1.5,marginBottom:4}}>{h.hook_text}</div>
-                        {h.hook_visual&&<div style={{fontSize:11,color:T.mid,marginBottom:2}}><b style={{color:T.gold}}>Visual: </b>{h.hook_visual}</div>}
-                        {h.hook_audio&&h.hook_audio!=="N/A"&&<div style={{fontSize:11,color:T.mid}}><b style={{color:T.gold}}>Audio: </b>{h.hook_audio}</div>}
-                      </div>
-                    </div>
-                    {isChosen&&(
-                      <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${T.goldB}40`}}>
-                        <div style={{fontSize:11,color:T.gold,fontWeight:700,marginBottom:6}}>Edit hook text if needed:</div>
-                        <textarea value={editedHook} onChange={e=>setEditedHook(e.target.value)} rows={2}
-                          style={{width:"100%",background:T.surface,border:`1.5px solid ${T.goldB}`,borderRadius:6,padding:"8px 12px",fontSize:13,color:T.text,fontFamily:"Georgia,serif",resize:"vertical",outline:"none",boxSizing:"border-box",lineHeight:1.6}}/>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              <div style={{display:"flex",gap:10,marginTop:8}}>
-                <Btn onClick={generateBrief} disabled={chosen===null||loading} style={{flex:1}}>{loading?"Generating brief...":"Generate Brief ->"}</Btn>
-                <Btn onClick={generateHooks} disabled={loading} variant="secondary">More Hooks</Btn>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {stage==="brief"&&(
-        <div>
-          {loading&&<div style={{background:T.blueL,border:`1.5px solid ${T.blue}`,borderRadius:8,padding:"16px",textAlign:"center",fontSize:13,color:T.blue,marginBottom:16}}>Generating brief...</div>}
-          {!loading&&brief&&!brief.error&&(
-            <div style={{background:T.surface,border:`2px solid ${T.goldB}`,borderRadius:10,overflow:"hidden"}}>
-              <div style={{background:T.goldL,padding:"12px 18px",borderBottom:`1px solid ${T.goldB}50`,display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:8}}>
-                <div>
-                  <div style={{fontSize:14,fontWeight:800,color:T.gold}}>Creator Brief</div>
-                  <div style={{fontSize:11,color:T.mid,marginTop:2}}>All fields editable below</div>
-                </div>
-                <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-                  {!alreadySaved&&<Btn onClick={saveBrief} variant="secondary" style={{fontSize:11,padding:"6px 12px"}}>Save Brief</Btn>}
-                  {alreadySaved&&<span style={{fontSize:11,color:T.green,fontWeight:700}}>Saved</span>}
-                  <Btn onClick={copyBrief} variant="secondary" style={{fontSize:11,padding:"6px 12px"}}>{copied?"Copied!":"Copy Text"}</Btn>
-                </div>
-              </div>
-              <div style={{padding:"18px 22px"}}>
-                <Lbl c={T.gold}>Hook</Lbl>
-                <div style={{background:T.goldL,border:`1.5px solid ${T.goldB}`,borderRadius:8,padding:"12px 16px",marginBottom:14}}>
-                  <EField label="Hook Text" val={brief.hook_text} onChange={v=>setBrief(p=>({...p,hook_text:v}))} color={T.gold}/>
-                  <EField label="Visual (0-3s)" val={brief.hook_visual} onChange={v=>setBrief(p=>({...p,hook_visual:v}))} color={T.gold}/>
-                  {brief.hook_audio!=="N/A"&&<EField label="Audio" val={brief.hook_audio} onChange={v=>setBrief(p=>({...p,hook_audio:v}))} color={T.gold}/>}
-                </div>
-                <div style={{background:T.warm,borderLeft:`3px solid ${T.goldB}`,padding:"10px 14px",borderRadius:"0 6px 6px 0",marginBottom:14}}>
-                  <EField label="Aha Moment" val={brief.aha} onChange={v=>setBrief(p=>({...p,aha:v}))} color={T.gold} multi rows={2}/>
-                </div>
-                <Lbl c={T.blue}>Ad Body - GBP</Lbl>
-                {[["GUT (0-3s)","gut",T.orange],["BRAIN A (3-8s)","brain_a",T.blue],["BRAIN B (8-15s)","brain_b",T.purple],["POCKET","pocket",T.green]].map(([l,k,c])=>(
-                  <div key={k} style={{borderLeft:`4px solid ${c}`,paddingLeft:12,marginBottom:12}}>
-                    <EField label={l} val={brief[k]} onChange={v=>setBrief(p=>({...p,[k]:v}))} color={c} multi rows={2}/>
-                  </div>
-                ))}
-                <Divider/>
-                <EField label="Brief Overview" val={brief.overview} onChange={v=>setBrief(p=>({...p,overview:v}))} color={T.purple} multi rows={3}/>
-                <EList label="Dos" items={brief.dos} onChange={(i,v)=>setBrief(p=>({...p,dos:p.dos.map((x,idx)=>idx===i?v:x)}))} color={T.green}/>
-                <EList label="Donts" items={brief.donts} onChange={(i,v)=>setBrief(p=>({...p,donts:p.donts.map((x,idx)=>idx===i?v:x)}))} color={T.red}/>
-                <EList label="B-Roll" items={brief.broll} onChange={(i,v)=>setBrief(p=>({...p,broll:p.broll.map((x,idx)=>idx===i?v:x)}))} color={T.blue}/>
-                <EField label="Casting" val={brief.casting} onChange={v=>setBrief(p=>({...p,casting:v}))} color={T.orange} multi rows={2}/>
-                <EList label="Variations" items={brief.variations} onChange={(i,v)=>setBrief(p=>({...p,variations:p.variations.map((x,idx)=>idx===i?v:x)}))} color={T.purple}/>
-                <EField label="Filming Spec" val={brief.filming} onChange={v=>setBrief(p=>({...p,filming:v}))} color={T.dim} multi rows={2}/>
-                <div style={{display:"flex",gap:10,marginTop:16}}>
-                  <button onClick={()=>{setStage("hooks");setBrief(null);}} style={{flex:1,background:T.warm,color:T.mid,border:`1.5px solid ${T.border}`,borderRadius:7,padding:10,fontSize:12,fontWeight:700,cursor:"pointer"}}>Back to Hooks</button>
-                  <button onClick={reset} style={{flex:1,background:T.warm,color:T.mid,border:`1.5px solid ${T.border}`,borderRadius:7,padding:10,fontSize:12,fontWeight:700,cursor:"pointer"}}>Start Over</button>
-                </div>
-              </div>
-            </div>
-          )}
-          {brief?.error&&<div style={{background:T.redL,color:T.red,padding:"12px 16px",borderRadius:7,fontSize:13,marginTop:8}}>Could not generate brief. <button onClick={generateBrief} style={{background:"none",border:"none",color:T.red,cursor:"pointer",textDecoration:"underline"}}>Try again</button></div>}
-        </div>
-      )}
-
-      {savedHooks.length>0&&(
-        <div style={{marginTop:24}}>
-          <Divider/>
-          <div style={{fontSize:14,fontWeight:800,color:T.text,marginBottom:12}}>Saved Briefs ({savedHooks.length})</div>
-          {savedHooks.map((h,i)=>(
-            <div key={i} onClick={()=>{setBrief(h);setSel(h.selections||sel);setStage("brief");window.scrollTo({top:0,behavior:"smooth"});}}
-              style={{background:T.warm,border:"1.5px solid "+T.border,borderRadius:7,padding:"12px 16px",marginBottom:8,cursor:"pointer",transition:"border-color 0.15s"}}
-              onMouseEnter={e=>e.currentTarget.style.borderColor=T.goldB}
-              onMouseLeave={e=>e.currentTarget.style.borderColor=T.border}>
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:4}}>"{h.hook_text}"</div>
-                  <div style={{fontSize:11,color:T.dim}}>{h.selections?.format} {h.selections?.subtype} | {h.selections?.awareness} | {h.date}</div>
-                </div>
-                <div style={{fontSize:11,color:T.gold,fontWeight:700,flexShrink:0}}>Open</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-
-// ── TREE TAB ──────────────────────────────────────────────────────────────────
-function TreeTab({brand,onRunInHookBuilder}){
-  const b=brand;
-  const cp=b.core_persona||{};
-  const sp=b.secondary_persona||{};
-
-  const Node=({label,sub,color=T.gold,colorL=T.goldL,colorB=T.goldB,dim=false,small=false})=>(
-    <div style={{background:dim?T.warm:colorL,border:`2px solid ${dim?T.border:colorB}`,borderRadius:8,padding:small?"7px 14px":"10px 18px",textAlign:"center",opacity:dim?0.5:1,display:"inline-block"}}>
-      <div style={{fontSize:small?11:13,fontWeight:700,color:dim?T.dim:color,whiteSpace:"nowrap"}}>{label}</div>
-      {sub&&<div style={{fontSize:10,color:dim?T.dim:color,marginTop:2,whiteSpace:"nowrap"}}>{sub}</div>}
-    </div>
-  );
-
-  const Line=({height=20})=><div style={{width:2,height,background:T.borderMid,margin:"0 auto"}}/>;
-  const Row=({children,gap=16})=><div style={{display:"flex",justifyContent:"center",gap,alignItems:"flex-start"}}>{children}</div>;
-  const Col=({children,align="center"})=><div style={{display:"flex",flexDirection:"column",alignItems:align}}>{children}</div>;
-  const SectionLabel=({text})=><div style={{fontSize:9,fontWeight:800,letterSpacing:2.5,color:T.dim,textTransform:"uppercase",textAlign:"center",margin:"4px 0 2px"}}>{text}</div>;
-
-  if(!b.name) return <div style={{padding:40,textAlign:"center",color:T.dim,fontSize:14}}>Fill in your Strategy Doc first - the tree will appear here once your brand data is populated.</div>;
-
-  return(
-    <div style={{overflowX:"auto",padding:"24px 16px"}}>
-      <div style={{minWidth:700,display:"flex",flexDirection:"column",alignItems:"center"}}>
-
-        <SectionLabel text="Brand"/>
-        <Node label={b.name||"Brand"} color={T.text} colorL={T.surface} colorB={T.borderMid}/>
-        <Line/>
-
-        <SectionLabel text="Organising Idea"/>
-        <div style={{background:T.warm,border:`1.5px solid ${T.border}`,borderRadius:8,padding:"10px 20px",maxWidth:500,textAlign:"center",marginBottom:0}}>
-          <div style={{fontSize:12,color:T.mid,fontStyle:"italic",lineHeight:1.5}}>{b.organising_idea||"-"}</div>
-        </div>
-        <Line/>
-
-        <SectionLabel text="Primary Organising Principle"/>
-        <Row gap={32}>
-          <Node label="Pain-First" sub="Lead with the problem" color={T.red} colorL={T.redL} colorB={T.red} dim={b.primary_principle!=="Pain-First"}/>
-          <Node label="Desire-First" sub="Lead with the vision" color={T.gold} colorL={T.goldL} colorB={T.goldB} dim={b.primary_principle!=="Desire-First"}/>
-        </Row>
-        <Line/>
-
-        <SectionLabel text="Personas"/>
-        <Row gap={48}>
-          <Col>
-            <Node label={cp.name||"Core Persona"} sub="Phase 1 - Core" color={T.green} colorL={T.greenL} colorB={T.green}/>
-            {cp.desire&&<div style={{fontSize:11,color:T.green,marginTop:4,textAlign:"center",maxWidth:160}}>Desires: {cp.desire.slice(0,40)}{cp.desire.length>40?"...":""}</div>}
-          </Col>
-          <Col>
-            <Node label={sp.name||"Secondary Persona"} sub="Phase 2" color={T.blue} colorL={T.blueL} colorB={T.blue} dim={!sp.name}/>
-            {sp.desire&&<div style={{fontSize:11,color:T.blue,marginTop:4,textAlign:"center",maxWidth:160}}>Desires: {sp.desire.slice(0,40)}{sp.desire.length>40?"...":""}</div>}
-          </Col>
-        </Row>
-        <Line/>
-
-        <SectionLabel text="Format"/>
-        <Row gap={48}>
-          <Node label="VIDEO" sub="UGC / Skit / Voiceover / Demo" color={T.blue} colorL={T.blueL} colorB={T.blue}/>
-          <Node label="IMAGE" sub="Quote / Us vs Them / Stats" color={T.purple} colorL={T.purpleL} colorB={T.purple}/>
-        </Row>
-        <Line/>
-
-        <SectionLabel text="Awareness Stage"/>
-        <Row gap={8}>
-          {AWARENESS.map(a=>{
-            const cols={Unaware:{c:T.red,bg:T.redL,b:T.red},"Problem Aware":{c:T.orange,bg:T.orangeL,b:T.orange},"Solution Aware":{c:T.gold,bg:T.goldL,b:T.goldB},"Product Aware":{c:T.blue,bg:T.blueL,b:T.blue},"Most Aware":{c:T.green,bg:T.greenL,b:T.green}}[a]||{c:T.dim,bg:T.warm,b:T.border};
-            return <Node key={a} label={a} color={cols.c} colorL={cols.bg} colorB={cols.b} small/>;
-          })}
-        </Row>
-        <Line/>
-
-        {(b.concepts||[]).length>0&&(
-          <>
-            <SectionLabel text="Saved Concepts"/>
-            <Row gap={12} style={{flexWrap:"wrap",maxWidth:700}}>
-              {b.concepts.map((c,i)=>{
-                const pc={"Feeling First":{c:T.gold,bg:T.goldL,b:T.goldB},"Understanding First":{c:T.blue,bg:T.blueL,b:T.blue},"Proof First":{c:T.purple,bg:T.purpleL,b:T.purple}}[c.persuasion]||{c:T.dim,bg:T.warm,b:T.border};
-                return(
-                  <Col key={i}>
-                    <div style={{background:pc.bg,border:`2px solid ${pc.b}`,borderRadius:8,padding:"10px 14px",textAlign:"center",minWidth:140,maxWidth:180}}>
-                      <div style={{fontSize:12,fontWeight:800,color:pc.c,marginBottom:4}}>{c.name}</div>
-                      <div style={{fontSize:10,color:pc.c,marginBottom:3}}>{c.persuasion}</div>
-                      <div style={{fontSize:10,color:T.dim}}>{c.awareness}</div>
-                      <div style={{fontSize:10,color:T.mid,marginTop:4,fontStyle:"italic",lineHeight:1.4}}>{c.angle}</div>
-                    </div>
-                    <Line height={10}/>
-                    <button onClick={()=>onRunInHookBuilder&&onRunInHookBuilder(c)}
-                      style={{background:T.text,border:"none",borderRadius:6,padding:"8px 14px",cursor:"pointer",width:"100%",maxWidth:180}}>
-                      <div style={{fontSize:9,color:"#fff",fontWeight:800,letterSpacing:1.5,textTransform:"uppercase"}}>Run in Hook Builder</div>
-                    </button>
-                  </Col>
-                );
-              })}
-            </Row>
-          </>
-        )}
-
-        {(b.concepts||[]).length===0&&(
-          <div style={{background:T.warm,border:`1.5px dashed ${T.border}`,borderRadius:8,padding:"16px 24px",textAlign:"center",maxWidth:400}}>
-            <div style={{fontSize:12,color:T.dim}}>Generate and save concepts in the Strategy Doc tab - they will appear here in the tree.</div>
-          </div>
-        )}
-
-        <Line height={8}/>
-        <SectionLabel text="Hook Builder"/>
-        <div style={{background:T.text,borderRadius:8,padding:"10px 20px",textAlign:"center"}}>
-          <div style={{fontSize:12,fontWeight:700,color:"#fff"}}>Select a concept -> run through Hook Builder -> get complete hook + brief</div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── PHASE 2 TAB ───────────────────────────────────────────────────────────────
-function Phase2Tab(){
-  return(
-    <div style={{maxWidth:700,margin:"0 auto"}}>
-      <div style={{fontSize:18,fontWeight:800,color:T.text,marginBottom:6}}>Phase 2 Plan</div>
-      <div style={{fontSize:13,color:T.mid,marginBottom:20}}>Only begin when Phase 1 has a winner running profitably. One layer at a time. Never two simultaneously.</div>
-      {[{level:"L0",label:"Same concept, format variation",desc:"Same script, different editing style or aspect ratio. Almost free to produce.",color:T.green},{level:"L1",label:"Same concept, hook variation",desc:"Same body from beat 2. Only opening line changes. One filming session.",color:T.blue},{level:"L2",label:"Same concept, angle variation",desc:"Same concept territory, different angle within it. Proven format.",color:T.gold},{level:"L3",label:"New concept, proven format",desc:"New message territory. Use the format you know works.",color:T.orange},{level:"L4",label:"New concept, new format",desc:"Both tested simultaneously. Higher risk. L0-L3 must be profitable first.",color:T.purple},{level:"L5",label:"Completely new territory",desc:"New concept, format, and persona. Only for scaling profitable accounts.",color:T.red}].map(({level,label,desc,color})=>(
-        <div key={level} style={{background:T.surface,border:`1.5px solid ${T.border}`,borderLeft:`5px solid ${color}`,borderRadius:6,padding:"13px 18px",marginBottom:10,display:"flex",gap:14}}>
-          <div style={{fontSize:15,fontWeight:900,color,minWidth:28,paddingTop:1}}>{level}</div>
-          <div><div style={{fontSize:13,fontWeight:700,color:T.text,marginBottom:3}}>{label}</div><div style={{fontSize:12,color:T.mid}}>{desc}</div></div>
-        </div>
-      ))}
-      <Divider/>
-      <div style={{fontSize:14,fontWeight:800,color:T.text,marginBottom:14}}>When Data Comes In</div>
-      {[{s:"Scenario A — No winners",a:"Diagnose first: wrong message, wrong format, or wrong audience. Identify which one before acting.",c:T.red},{s:"Scenario B — One or two winners",a:"Protect the winner. Do not touch it. Find what made it win. Iterate one variable at a time. Build next concept in parallel (90/10 rule).",c:T.gold},{s:"Scenario C — Strong winner + good CPA",a:"You have a foundation. Every phase from here adds exactly one layer to what is already proven.",c:T.green}].map(({s,a,c})=>(
-        <div key={s} style={{background:T.surface,border:`1.5px solid ${T.border}`,borderTop:`3px solid ${c}`,borderRadius:8,padding:"14px 18px",marginBottom:12}}>
-          <div style={{fontSize:13,fontWeight:800,color:c,marginBottom:6}}>{s}</div>
-          <div style={{fontSize:12,color:T.mid,lineHeight:1.6}}>{a}</div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// ── APP ───────────────────────────────────────────────────────────────────────
-export default function App(){
-  const [brand,setBrand]=useState(null);
-  const [tab,setTab]=useState("doc");
-  const [savedHooks,setSavedHooks]=useState([]);
-  const [activeConcept,setActiveConcept]=useState(null);
-
-  const runInHookBuilder=(c)=>{setActiveConcept(c);setTab("hooks");};
-
-  const saveBrandJSON=()=>{
-    const data={brand,savedHooks};
-    const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
-    const url=URL.createObjectURL(blob);
-    const a=document.createElement("a");
-    a.href=url;a.download=`${brand.name||"brand"}-strategy.json`;
-    a.click();URL.revokeObjectURL(url);
-  };
-
-  if(!brand)return <Setup onDone={d=>{setBrand(d);if(d.savedHooks)setSavedHooks(d.savedHooks);}}/>;
-
-  const TABS=[{id:"doc",label:"Strategy Doc"},{id:"tree",label:"Strategy Tree"},{id:"hooks",label:"Hook Builder"},{id:"phase2",label:"Phase 2"}];
-
-  return(
-    <div style={{background:T.bg,minHeight:"100vh",fontFamily:"Georgia,'Times New Roman',serif",color:T.text}}>
-      <div style={{background:T.surface,borderBottom:`2px solid ${T.border}`,padding:"14px 24px",position:"sticky",top:0,zIndex:10}}>
-        <div style={{maxWidth:700,margin:"0 auto",display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
-          <div style={{display:"flex",alignItems:"center",gap:12}}>
-            <div>
-              <div style={{fontSize:10,letterSpacing:3,color:T.dim,textTransform:"uppercase"}}>Creative Room</div>
-              <div style={{fontSize:20,fontWeight:800,color:T.text}}>{brand.name||"Untitled Brand"}</div>
-            </div>
-            {brand.primary_principle&&<Chip label={brand.primary_principle}/>}
-          </div>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            <Btn onClick={saveBrandJSON} variant="secondary" style={{fontSize:11,padding:"6px 12px"}}>dl Save Brand JSON</Btn>
-            <Btn onClick={()=>{setBrand(null);setSavedHooks([]);}} variant="secondary" style={{fontSize:11,padding:"6px 12px"}}>Switch Brand</Btn>
-          </div>
-        </div>
-        <div style={{maxWidth:700,margin:"10px auto -15px",display:"flex"}}>
-          {TABS.map(t=>(
-            <button key={t.id} onClick={()=>setTab(t.id)} style={{fontSize:11,fontWeight:700,letterSpacing:1,textTransform:"uppercase",color:tab===t.id?T.gold:T.dim,background:"transparent",border:"none",borderBottom:tab===t.id?`3px solid ${T.goldB}`:"3px solid transparent",padding:"7px 16px",cursor:"pointer"}}>{t.label}</button>
-          ))}
-        </div>
-      </div>
-      <div style={{padding:"28px 24px"}}>
-        {tab==="doc"&&<DocTab brand={brand} set={setBrand}/>}
-        {tab==="tree"&&<TreeTab brand={brand} onRunInHookBuilder={runInHookBuilder}/>}
-        {tab==="hooks"&&<HookTab brand={brand} savedHooks={savedHooks} setSavedHooks={setSavedHooks} activeConcept={activeConcept} clearActiveConcept={()=>setActiveConcept(null)}/>}
-        {tab==="phase2"&&<Phase2Tab/>}
+  return (
+    <div style={{ height: "100vh", display: "flex", flexDirection: "column", fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif", background: C.bg }}>
+      <style>{`* { box-sizing: border-box; } button, textarea, input { font-family: inherit; } ::-webkit-scrollbar { width: 4px; } ::-webkit-scrollbar-thumb { background: #e8e2d9; border-radius: 3px; } @keyframes dot { 0%,100%{opacity:.25;transform:scale(.75)} 50%{opacity:1;transform:scale(1)} }`}</style>
+      <div style={{ flex: 1, overflow: "hidden" }}>
+        {screen === "onboarding" && <Onboarding onComplete={() => setScreen("home")} />}
+        {screen === "home" && <Home onMode={goToMode} context={context} onContext={setContext} brands={brands} onSaveBrand={saveBrand} onDeleteBrand={deleteBrand} sessions={sessions} hookCount={library.reduce((n, e) => n + e.hooks.length, 0)} onViewLibrary={() => setScreen("library")} />}
+        {screen === "mode" && mode && <ModeChat mode={mode} onBack={() => { setMode(null); setScreen("home"); setBriefHook(null); }} context={context} msgs={sessions[mode]} setMsgs={(m) => setModeSession(mode, m)} onSaveHooks={saveHooks} onViewLibrary={() => { setMode(null); setScreen("library"); }} />}
+        {screen === "library" && <HookLibrary library={library} onDeleteEntry={deleteEntry} onDeleteHook={deleteHook} onBack={() => setScreen("home")} onBriefHook={handleBriefHook} />}
       </div>
     </div>
   );
